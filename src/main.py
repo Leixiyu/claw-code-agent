@@ -31,6 +31,7 @@ from .bootstrap_graph import build_bootstrap_graph
 from .command_graph import build_command_graph
 from .commands import execute_command, get_command, get_commands, render_command_index
 from .config_runtime import ConfigRuntime
+from .env_loader import load_project_env
 from .lsp_runtime import LSPRuntime
 from .mcp_runtime import MCPRuntime
 from .parity_audit import run_parity_audit
@@ -73,7 +74,7 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
         parser.add_argument('--timeout-seconds', type=float, default=120.0)
         parser.add_argument('--input-cost-per-million', type=float, default=0.0)
         parser.add_argument('--output-cost-per-million', type=float, default=0.0)
-    parser.add_argument('--cwd', default='.')
+    parser.add_argument('--cwd', default=os.environ.get('AGENT_WORKSPACE') or '.')
     parser.add_argument('--add-dir', action='append', default=[])
     parser.add_argument('--disable-claude-md', action='store_true')
     parser.add_argument('--allow-write', action='store_true')
@@ -232,7 +233,6 @@ def _append_agent_forwarded_args(
     if include_backend:
         command.extend(['--model', str(args.model)])
         command.extend(['--base-url', str(args.base_url)])
-        command.extend(['--api-key', str(args.api_key)])
         command.extend(['--temperature', str(args.temperature)])
         command.extend(['--timeout-seconds', str(args.timeout_seconds)])
         command.extend(['--input-cost-per-million', str(args.input_cost_per_million)])
@@ -331,6 +331,7 @@ def _launch_background_agent(args: argparse.Namespace) -> int:
         model=args.model,
         background_id=background_id,
         process_cwd=Path(__file__).resolve().parent.parent,
+        process_env={**os.environ, 'OPENAI_API_KEY': str(args.api_key)},
     )
     print('# Background Session')
     print(f'background_id={record.background_id}')
@@ -948,6 +949,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_project_env()
     parser = build_parser()
     args = parser.parse_args(argv)
     manifest = build_port_manifest()

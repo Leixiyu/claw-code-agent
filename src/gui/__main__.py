@@ -10,11 +10,13 @@ from pathlib import Path
 
 import uvicorn
 
+from ..env_loader import load_project_env
 from ..session_store import DEFAULT_AGENT_SESSION_DIR
 from .server import AgentState, create_app
 
 
 def main() -> None:
+    load_project_env()
     parser = argparse.ArgumentParser(
         prog='claw-code-gui',
         description='Launch the local web GUI for the claw-code agent.',
@@ -23,7 +25,7 @@ def main() -> None:
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument(
         '--cwd',
-        default='.',
+        default=os.environ.get('AGENT_WORKSPACE') or '.',
         help='Working directory that the agent operates in (default: current dir).',
     )
     parser.add_argument(

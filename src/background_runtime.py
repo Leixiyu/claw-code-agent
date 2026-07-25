@@ -106,6 +106,7 @@ class BackgroundSessionRuntime:
         mode: str = 'agent',
         background_id: str | None = None,
         process_cwd: Path | None = None,
+        process_env: dict[str, str] | None = None,
     ) -> BackgroundSessionRecord:
         background_id = background_id or self.create_id()
         log_path = self.log_path(background_id)
@@ -117,6 +118,7 @@ class BackgroundSessionRuntime:
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 cwd=str(process_cwd or Path.cwd()),
+                env=process_env,
                 start_new_session=True,
             )
         _DETACHED_PROCESSES[process.pid] = process

@@ -399,6 +399,9 @@ Notes:
 
 ### 2. Configure Environment
 
+The CLI and GUI automatically load a `.env` file from the directory where
+they are started. Existing process environment variables take precedence.
+
 ```bash
 export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
 export OPENAI_API_KEY=local-token

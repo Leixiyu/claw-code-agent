@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -119,7 +120,6 @@ def serialize_model_config(model_config: ModelConfig) -> JSONDict:
     return {
         'model': model_config.model,
         'base_url': model_config.base_url,
-        'api_key': model_config.api_key,
         'temperature': model_config.temperature,
         'timeout_seconds': model_config.timeout_seconds,
         'pricing': {
@@ -135,7 +135,11 @@ def deserialize_model_config(payload: JSONDict) -> ModelConfig:
     return ModelConfig(
         model=str(payload['model']),
         base_url=str(payload.get('base_url', 'http://127.0.0.1:8000/v1')),
-        api_key=str(payload.get('api_key', 'local-token')),
+        api_key=(
+            os.environ.get('OPENAI_API_KEY')
+            or os.environ.get('DASHSCOPE_API_KEY')
+            or str(payload.get('api_key', 'local-token'))
+        ),
         temperature=float(payload.get('temperature', 0.0)),
         timeout_seconds=float(payload.get('timeout_seconds', 120.0)),
         pricing=_deserialize_pricing(payload.get('pricing')),

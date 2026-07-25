@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.agent_types import (
     AgentPermissions,
@@ -227,11 +228,13 @@ class TestModelConfigSerialization(unittest.TestCase):
             pricing=pricing,
         )
         payload = serialize_model_config(config)
-        restored = deserialize_model_config(payload)
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-runtime-key'}):
+            restored = deserialize_model_config(payload)
 
         self.assertEqual(restored.model, config.model)
         self.assertEqual(restored.base_url, config.base_url)
-        self.assertEqual(restored.api_key, config.api_key)
+        self.assertNotIn('api_key', payload)
+        self.assertEqual(restored.api_key, 'sk-runtime-key')
         self.assertAlmostEqual(restored.temperature, config.temperature)
         self.assertAlmostEqual(restored.timeout_seconds, config.timeout_seconds)
         self.assertAlmostEqual(
