@@ -64,8 +64,6 @@ mkdir -p /home/atis/Documents/RAY/claw_agent_data/video-output
 mkdir -p /home/atis/Documents/RAY/claw_agent_data/video-temp
 mkdir -p /home/atis/Documents/RAY/claw_agent_data/logs
 chmod 700 /home/atis/Documents/RAY/claw_agent_data
-
-sudo mkdir -p /etc/claw-code-agent
 ```
 
 这样视频、日志和 Session 不会进入 Git 仓库。正式生产或多人共用服务器时，建议再将代码
@@ -116,12 +114,17 @@ python3 -m venv .venv
 
 ## 5. 配置模型和运行目录
 
-生产环境建议使用 systemd 的 `EnvironmentFile`，不要把真实 `.env` 放在 Git 仓库中。
+4090 是个人测试服务器，因此统一使用 Harness 根目录下的 `.env`：
 
-创建配置文件：
+```text
+/home/atis/Documents/RAY/claw_code_agent/.env
+```
+
+进入项目并创建或编辑：
 
 ```bash
-sudoedit /etc/claw-code-agent/agent.env
+cd /home/atis/Documents/RAY/claw_code_agent
+nano .env
 ```
 
 百炼 API 示例：
@@ -145,17 +148,22 @@ TASK_API_TOKEN=
 
 注意：
 
-- systemd `EnvironmentFile` 不应依赖 `${DASHSCOPE_API_KEY}` 形式的变量展开。
-- 在服务器配置中直接设置 `OPENAI_API_KEY`。
+- `.env` 中直接设置 `OPENAI_API_KEY`，不要使用
+  `OPENAI_API_KEY="${DASHSCOPE_API_KEY}"`；systemd `EnvironmentFile` 不执行变量展开。
 - 不要在值的两侧加入不必要的 Shell 命令或 `export`。
-- 不要把该文件提交到 Git。
+- `.env` 已在 `.gitignore` 中，仍应在每次提交前检查它没有进入 Git。
+- 不要在终端、日志、截图或文档中输出真实 API Key。
 
 设置权限：
 
 ```bash
-sudo chown root:"$(id -gn atis)" /etc/claw-code-agent/agent.env
-sudo chmod 640 /etc/claw-code-agent/agent.env
+cd /home/atis/Documents/RAY/claw_code_agent
+chown atis:"$(id -gn atis)" .env
+chmod 600 .env
+git check-ignore -v .env
 ```
+
+`600` 表示只有 `atis` 可以读取和修改该文件。
 
 ## 6. 先进行命令行 Smoke Test
 
@@ -163,7 +171,7 @@ sudo chmod 640 /etc/claw-code-agent/agent.env
 
 ```bash
 set -a
-source /etc/claw-code-agent/agent.env
+source /home/atis/Documents/RAY/claw_code_agent/.env
 set +a
 
 cd /home/atis/Documents/RAY/claw_agent_data
@@ -206,7 +214,7 @@ After=network-online.target
 Type=simple
 User=atis
 WorkingDirectory=/home/atis/Documents/RAY/claw_agent_data
-EnvironmentFile=/etc/claw-code-agent/agent.env
+EnvironmentFile=/home/atis/Documents/RAY/claw_code_agent/.env
 
 ExecStart=/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-gui \
   --host 127.0.0.1 \
@@ -381,9 +389,9 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 
 - [ ] Python 版本不低于 3.10。
 - [ ] 服务由 `atis` 非 root 用户运行。
-- [ ] API Key 只存在于 `/etc/claw-code-agent/agent.env`。
-- [ ] 配置文件权限为 `640` 或更严格。
-- [ ] `.env` 和 API Key 没有进入 Git。
+- [ ] API Key 只存在于 Harness 根目录的 `.env`。
+- [ ] `.env` 所有者是 `atis`，权限为 `600`。
+- [ ] `.env` 已被 `.gitignore` 忽略，没有进入 Git。
 - [ ] GUI 只监听 `127.0.0.1`。
 - [ ] 默认未启用 Shell、Unsafe 和文件写入权限。
 - [ ] systemd 服务可以自动启动和失败重启。
