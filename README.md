@@ -150,6 +150,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 |----------|-------------|
 | [TESTING_GUIDE.md](TESTING_GUIDE.md) | Step-by-step commands to verify every feature |
 | [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md) | Full implementation status vs the npm source |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Server deployment, systemd, security, verification, update, and rollback guide |
 
 ### ✅ Done
 
