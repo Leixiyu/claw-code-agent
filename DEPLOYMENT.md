@@ -7,7 +7,9 @@
 - Harness 和 GUI 部署在本机
 - LLM 通过阿里云百炼 OpenAI-compatible API 调用
 - systemd 负责进程守护
-- 服务使用独立的非 root 用户
+- 4090 POC 使用现有非 root 用户 `atis`
+- Harness 路径为 `/home/atis/Documents/RAY/claw_code_agent`
+- 运行数据存放在相邻的 `/home/atis/Documents/RAY/claw_agent_data`
 - GUI 只监听 `127.0.0.1`
 
 当前 Harness 是 Agent runtime 和本地管理 GUI，不是完整的视频业务工作流服务。视频上传、
@@ -22,7 +24,7 @@ Linux
 Python >= 3.10
 Git
 可访问模型 API 的 HTTPS 网络
-一个独立的运行用户
+非 root 运行用户 atis
 一个 Agent 工作目录
 ```
 
@@ -41,62 +43,51 @@ sudo apt-get install -y git python3 python3-venv curl ca-certificates
 
 再次确认版本满足要求后再继续。
 
-## 2. 创建运行用户和目录
+## 2. 创建运行目录
 
-创建无交互登录权限的系统用户：
+4090 POC 直接使用现有的 `atis` 用户，不需要再创建 `claw-agent` 系统用户。
 
-```bash
-sudo useradd \
-  --system \
-  --create-home \
-  --home-dir /var/lib/claw-code-agent \
-  --shell /usr/sbin/nologin \
-  claw-agent
+代码和运行数据分开放置：
+
+```text
+/home/atis/Documents/RAY/claw_code_agent   # Git 代码和 Python 虚拟环境
+/home/atis/Documents/RAY/claw_agent_data   # Session、视频、日志和临时数据
 ```
 
-创建代码、状态、工作区和配置目录：
+以 `atis` 用户创建运行目录：
 
 ```bash
-sudo mkdir -p /opt/claw-code-agent
-sudo mkdir -p /var/lib/claw-code-agent/sessions
-sudo mkdir -p /srv/claw-agent/workspace
-sudo mkdir -p /srv/claw-agent/video-input
-sudo mkdir -p /srv/claw-agent/video-output
-sudo mkdir -p /srv/claw-agent/video-temp
-sudo mkdir -p /srv/claw-agent/logs
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/sessions
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/video-input
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/video-output
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/video-temp
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/logs
+chmod 700 /home/atis/Documents/RAY/claw_agent_data
+
 sudo mkdir -p /etc/claw-code-agent
 ```
 
-只把运行时需要写入的目录交给服务用户：
-
-```bash
-sudo chown -R claw-agent:claw-agent /var/lib/claw-code-agent
-sudo chown -R claw-agent:claw-agent /srv/claw-agent
-sudo chmod 750 /var/lib/claw-code-agent
-sudo chmod 750 /srv/claw-agent
-```
+这样视频、日志和 Session 不会进入 Git 仓库。正式生产或多人共用服务器时，建议再将代码
+迁移到 `/opt/claw-code-agent`，并使用独立的 `claw-agent` 系统用户。
 
 ## 3. 获取代码
 
-首次部署：
+如果代码还不存在，首次获取：
 
 ```bash
-sudo git clone \
+mkdir -p /home/atis/Documents/RAY
+git clone \
   https://github.com/Leixiyu/claw-code-agent.git \
-  /opt/claw-code-agent
+  /home/atis/Documents/RAY/claw_code_agent
 ```
 
-代码目录建议保持 root 所有，运行用户只读：
-
-```bash
-sudo chown -R root:root /opt/claw-code-agent
-sudo chmod -R a+rX /opt/claw-code-agent
-```
+如果代码已经位于该路径，不要再次 clone。
 
 确认版本：
 
 ```bash
-cd /opt/claw-code-agent
+cd /home/atis/Documents/RAY/claw_code_agent
 git branch --show-current
 git log -1 --oneline
 ```
@@ -106,18 +97,18 @@ git log -1 --oneline
 ## 4. 创建虚拟环境并安装依赖
 
 ```bash
-cd /opt/claw-code-agent
-sudo python3 -m venv .venv
-sudo .venv/bin/python -m pip install --upgrade pip setuptools wheel
-sudo .venv/bin/pip install -r requirements.txt
-sudo .venv/bin/pip install . --no-deps
+cd /home/atis/Documents/RAY/claw_code_agent
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install . --no-deps
 ```
 
 验证入口：
 
 ```bash
-/opt/claw-code-agent/.venv/bin/claw-code-agent --help
-/opt/claw-code-agent/.venv/bin/claw-code-gui --help
+/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-agent --help
+/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-gui --help
 ```
 
 `vLLM` 不应安装到这个 Harness 虚拟环境。只有在服务器自行托管模型时，才应为 vLLM
@@ -140,11 +131,11 @@ OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_API_KEY=替换为真实百炼APIKey
 OPENAI_MODEL=qwen3-coder-next
 
-AGENT_WORKSPACE=/srv/claw-agent/workspace
-VIDEO_INPUT_DIR=/srv/claw-agent/video-input
-VIDEO_OUTPUT_DIR=/srv/claw-agent/video-output
-VIDEO_TEMP_DIR=/srv/claw-agent/video-temp
-TASK_LOG_DIR=/srv/claw-agent/logs
+AGENT_WORKSPACE=/home/atis/Documents/RAY/claw_agent_data/workspace
+VIDEO_INPUT_DIR=/home/atis/Documents/RAY/claw_agent_data/video-input
+VIDEO_OUTPUT_DIR=/home/atis/Documents/RAY/claw_agent_data/video-output
+VIDEO_TEMP_DIR=/home/atis/Documents/RAY/claw_agent_data/video-temp
+TASK_LOG_DIR=/home/atis/Documents/RAY/claw_agent_data/logs
 
 BUSINESS_API_BASE_URL=
 BUSINESS_API_TOKEN=
@@ -162,7 +153,7 @@ TASK_API_TOKEN=
 设置权限：
 
 ```bash
-sudo chown root:claw-agent /etc/claw-code-agent/agent.env
+sudo chown root:"$(id -gn atis)" /etc/claw-code-agent/agent.env
 sudo chmod 640 /etc/claw-code-agent/agent.env
 ```
 
@@ -171,14 +162,13 @@ sudo chmod 640 /etc/claw-code-agent/agent.env
 使用服务用户加载受信任的配置并执行一次只读测试：
 
 ```bash
-sudo -u claw-agent bash -lc '
-  set -a
-  source /etc/claw-code-agent/agent.env
-  set +a
-  cd /var/lib/claw-code-agent
-  /opt/claw-code-agent/.venv/bin/claw-code-agent agent \
-    "只检查当前工作目录并简要说明可见文件，不要修改任何内容。"
-'
+set -a
+source /etc/claw-code-agent/agent.env
+set +a
+
+cd /home/atis/Documents/RAY/claw_agent_data
+/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-agent agent \
+  "只检查当前工作目录并简要说明可见文件，不要修改任何内容。"
 ```
 
 验收：
@@ -187,7 +177,7 @@ sudo -u claw-agent bash -lc '
 - Agent 能返回响应。
 - 默认不能写文件。
 - 默认不能执行 Shell。
-- `/var/lib/claw-code-agent` 下可以生成本地 session 状态。
+- `/home/atis/Documents/RAY/claw_agent_data` 下可以生成本地 session 状态。
 - 输出和 session 中不应出现 API Key。
 
 如果这一步失败，先不要创建 systemd 服务。优先检查：
@@ -214,16 +204,15 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=claw-agent
-Group=claw-agent
-WorkingDirectory=/var/lib/claw-code-agent
+User=atis
+WorkingDirectory=/home/atis/Documents/RAY/claw_agent_data
 EnvironmentFile=/etc/claw-code-agent/agent.env
 
-ExecStart=/opt/claw-code-agent/.venv/bin/claw-code-gui \
+ExecStart=/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-gui \
   --host 127.0.0.1 \
   --port 8765 \
   --no-browser \
-  --session-dir /var/lib/claw-code-agent/sessions
+  --session-dir /home/atis/Documents/RAY/claw_agent_data/sessions
 
 Restart=on-failure
 RestartSec=5
@@ -233,9 +222,9 @@ UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/claw-code-agent
-ReadWritePaths=/srv/claw-agent
+ProtectHome=read-only
+ReadOnlyPaths=/home/atis/Documents/RAY/claw_code_agent
+ReadWritePaths=/home/atis/Documents/RAY/claw_agent_data
 
 [Install]
 WantedBy=multi-user.target
@@ -312,19 +301,19 @@ http://127.0.0.1:8765
 更新前记录当前 commit：
 
 ```bash
-cd /opt/claw-code-agent
+cd /home/atis/Documents/RAY/claw_code_agent
 git rev-parse HEAD
 ```
 
 拉取并重新安装：
 
 ```bash
-cd /opt/claw-code-agent
-sudo git fetch origin
-sudo git switch main
-sudo git pull --ff-only origin main
-sudo .venv/bin/pip install -r requirements.txt
-sudo .venv/bin/pip install . --no-deps
+cd /home/atis/Documents/RAY/claw_code_agent
+git fetch origin
+git switch main
+git pull --ff-only origin main
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install . --no-deps
 sudo systemctl restart claw-code-agent
 ```
 
@@ -343,10 +332,10 @@ sudo journalctl -u claw-code-agent -n 100 --no-pager
 使用更新前记录的 commit：
 
 ```bash
-cd /opt/claw-code-agent
-sudo git switch --detach <known-good-commit>
-sudo .venv/bin/pip install -r requirements.txt
-sudo .venv/bin/pip install . --no-deps
+cd /home/atis/Documents/RAY/claw_code_agent
+git switch --detach <known-good-commit>
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install . --no-deps
 sudo systemctl restart claw-code-agent
 ```
 
@@ -391,7 +380,7 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 ## 14. 部署验收清单
 
 - [ ] Python 版本不低于 3.10。
-- [ ] 服务由 `claw-agent` 非 root 用户运行。
+- [ ] 服务由 `atis` 非 root 用户运行。
 - [ ] API Key 只存在于 `/etc/claw-code-agent/agent.env`。
 - [ ] 配置文件权限为 `640` 或更严格。
 - [ ] `.env` 和 API Key 没有进入 Git。
