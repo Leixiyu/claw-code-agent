@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="images/logo.png" alt="Claw Code Agent logo" width="420" />
-</p>
-
 <h1 align="center">Claw Code Agent</h1>
 
 <p align="center">
@@ -228,8 +224,7 @@ claw-code/
 ├── PARITY_CHECKLIST.md           # Implementation status vs npm source
 ├── pyproject.toml
 ├── .gitignore
-├── images/
-│   └── logo.png
+├── images/                       # Demo animations
 ├── src/                          # Python implementation
 │   ├── main.py                   # CLI entry point & argument parsing
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
