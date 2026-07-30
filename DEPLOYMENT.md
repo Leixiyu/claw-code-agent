@@ -383,7 +383,8 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - 多租户权限
 - 生产级外部 API
 
-这些能力的开发进度以 README 末尾的“视频处理 Agent：当前进度与开发路线”为准。
+这些能力的开发进度、适配阶段和 POC 验收标准以
+[undeveloped_adaptation.md](undeveloped_adaptation.md) 为准。
 
 ## 14. 部署验收清单
 

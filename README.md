@@ -1,7 +1,7 @@
 <h1 align="center">Claw Code Agent</h1>
 
 <p align="center">
-  <em>A Python reimplementation of the Claude Code agent architecture — local models, full control, zero dependencies.</em>
+  <em>A Python reimplementation of the Claude Code agent architecture — local models, full control, and a lightweight standard-library core.</em>
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
   <a href="https://github.com/HarnessLab/claw-code-agent"><img src="https://img.shields.io/badge/repo-HarnessLab%2Fclaw--code--agent-181717?logo=github" alt="GitHub"></a>
   <a href="https://docs.vllm.ai/"><img src="https://img.shields.io/badge/backend-vLLM-FF6F00?logo=lightning&logoColor=white" alt="vLLM"></a>
   <a href="https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct"><img src="https://img.shields.io/badge/model-Qwen3--Coder-FFD21E?logo=huggingface&logoColor=black" alt="Qwen3-Coder"></a>
-  <img src="https://img.shields.io/badge/dependencies-zero-brightgreen" alt="Zero Dependencies">
+  <img src="https://img.shields.io/badge/core-standard_library-3776AB" alt="Standard-library core">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Alpha">
   <img src="https://img.shields.io/badge/license-open--source-green" alt="License">
 </p>
@@ -90,7 +90,9 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 
 > **Goal:** Not to ship the original npm source, but to reimplement the full agent flow in Python — prompt assembly, context building, slash commands, tool calling, session persistence, and local model execution.
 >
-> **Zero external dependencies** — just Python's standard library.
+> **Lightweight core:** the model client and `.env` loader use Python's standard
+> library. The local web GUI uses FastAPI, Uvicorn, and Pydantic, while the GUI
+> test suite additionally uses HTTPX.
 
 <p align="center">
   <img src="images/demo_2.gif" alt="Claw Code Agent demo" width="900" />
@@ -134,7 +136,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | 🔐 **Permission System** | Granular control: `--allow-write`, `--allow-shell`, `--unsafe` |
 | 🏗️ **OpenAI-Compatible** | Works with vLLM, Ollama, LiteLLM Proxy, OpenRouter — any OpenAI-compatible API |
 | 🐉 **Qwen3-Coder** | First-class support for `Qwen3-Coder-30B-A3B-Instruct` via vLLM |
-| 📦 **Zero Dependencies** | Pure Python standard library — nothing to install |
+| 📦 **Lightweight Core** | Standard-library model client and `.env` loader, with explicit dependencies for the local GUI and its tests |
 
 ---
 
@@ -147,6 +149,8 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | [TESTING_GUIDE.md](TESTING_GUIDE.md) | Step-by-step commands to verify every feature |
 | [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md) | Full implementation status vs the npm source |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Server deployment, systemd, security, verification, update, and rollback guide |
+| [agent_operation.md](agent_operation.md) | Runtime video-agent operations template; deploy as `CLAUDE.md` in the Agent data workspace |
+| [undeveloped_adaptation.md](undeveloped_adaptation.md) | Planned video-business adaptations, current limitations, milestones, and POC acceptance criteria |
 
 ### ✅ Done
 
@@ -218,14 +222,28 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 ## 🏗️ Architecture
 
 ```text
-claw-code/
-├── README.md
-├── TESTING_GUIDE.md              # How to test every feature
-├── PARITY_CHECKLIST.md           # Implementation status vs npm source
-├── pyproject.toml
+claw-code-agent/
+├── README.md                     # Project overview, setup, and usage
+├── CLAUDE.md                     # Development instructions for maintaining the Harness
+├── DEPLOYMENT.md                 # Server deployment, security, update, and rollback
+├── TESTING_GUIDE.md              # Commands for testing every Harness feature
+├── PARITY_CHECKLIST.md           # Implementation status vs the npm source
+├── agent_operation.md            # Runtime video-agent policy template
+├── undeveloped_adaptation.md     # Video-business adaptation roadmap and POC criteria
+├── pyproject.toml                # Package metadata and runtime dependencies
+├── requirements.txt              # Pinned ranges for runtime, GUI, and GUI-test dependencies
+├── harbor_adapter.py             # Harbor benchmark integration adapter
+├── install_dockor.sh             # Rootless Docker setup helper
 ├── .gitignore
-├── images/                       # Demo animations
-├── src/                          # Python implementation
+├── images/                       # README demo animations
+├── benchmarks/                   # Standard and local Agent evaluation suites
+│   ├── README.md                 # Benchmark setup and command reference
+│   ├── run.py                    # Local task benchmark entry point
+│   ├── run_suite.py              # Standard evaluation suite entry point
+│   ├── suites/                   # Benchmark suite implementations
+│   ├── tasks/                    # Local benchmark task definitions
+│   └── data/                     # Downloaded or local benchmark datasets
+├── src/                          # Python Harness implementation
 │   ├── main.py                   # CLI entry point & argument parsing
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
@@ -289,7 +307,9 @@ claw-code/
 | Requirement | Details |
 |-------------|---------|
 | 🐍 Python | `3.10` or higher |
-| 📚 Dependencies | **None** — pure Python standard library |
+| 🪶 Core client | The model client and `.env` loader use the Python standard library |
+| 🖥️ GUI runtime | FastAPI, Uvicorn, and Pydantic; installed by `pip install -e .` or `pip install -r requirements.txt` |
+| 🧪 GUI tests | HTTPX; included in `requirements.txt` for the FastAPI/Starlette test client |
 | 🖥️ Model Server | `vLLM`, `Ollama`, `LiteLLM Proxy`, or `OpenRouter`, with tool calling support |
 | 🧠 Model | [`Qwen/Qwen3-Coder-30B-A3B-Instruct`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) (recommended) |
 
@@ -810,7 +830,11 @@ Paste anything ≥500 characters into the composer (a logfile, a stack trace, an
 - The chip's `✕` button drops both the content stash and any inline ref so it can't accidentally come along.
 - The stash clears after every successful send and when you click `+ New chat`.
 
-> **Note:** The GUI uses [FastAPI](https://fastapi.tiangolo.com/) and [Uvicorn](https://www.uvicorn.org/) under the hood. These get installed automatically if you install the package via `pip install -e .`. The core Python agent runtime itself remains dependency-free.
+> **Note:** The GUI uses [FastAPI](https://fastapi.tiangolo.com/),
+> [Uvicorn](https://www.uvicorn.org/), and Pydantic. These are installed by
+> `pip install -e .`; `requirements.txt` also installs HTTPX for the GUI test
+> suite. The model client and `.env` loader themselves use only Python's
+> standard library.
 
 ---
 
@@ -903,155 +927,3 @@ It covers: core runtime, CLI modes, prompt assembly, context/memory, slash comma
 <p align="center">
   <sub>Built with 🐍 Python · Powered by 🐉 HarnessLab Team.</sub>
 </p>
-
----
-
-## 视频处理 Agent：当前进度与开发路线
-
-> 本节是项目接入视频业务的阶段性记录，快照日期为 **2026-07-25**。
-> 当前目标是先完成本地 Agent Harness 的部署和验证；视频处理项目、业务接口及模型服务仍在设计中。
-
-### 目标业务
-
-Agent 最终需要根据用户 Prompt 和视频信息识别业务场景，并完成以下流程：
-
-1. 将用户上传的视频提交到对应场景的视频分析接口。
-2. 查询分析任务进度并返回分析结果。
-3. 将视频或数据集提交到对应场景的模型训练接口。
-4. 查询训练进度、验证训练结果。
-5. 在满足指标和审批条件后部署模型。
-6. 使用已部署模型处理后续同类视频。
-
-视频二进制数据不应放入 LLM 上下文。推荐先写入对象存储或共享文件系统，仅向 Agent 提供
-`video_id`、对象地址、元数据、用户描述和任务状态摘要。
-
-### 推荐架构边界
-
-```text
-用户 Prompt / 视频元数据
-          |
-          v
-Qwen：识别 scenario、operation 和缺失参数
-          |
-          v
-Agent Harness：选择经过注册和授权的业务工具
-          |
-          v
-视频分析 API / 模型训练 API / 模型部署 API
-          |
-          v
-持久化任务状态 + 异步 Worker + Webhook/轮询
-          |
-          v
-Agent 恢复任务并向用户汇报进度和结果
-```
-
-Qwen 和 Harness 负责意图理解与受控工具选择，不负责直接生成任意 URL、认证 Header、
-Shell 命令或模型部署命令。场景到接口、模型和工作流的映射应由后端配置决定。
-
-### 已完成
-
-- [x] 保留上游 Git 历史，并建立独立项目仓库。
-- [x] 支持 OpenAI-compatible Chat Completions 和标准 `tools/tool_calls` Agent loop。
-- [x] 可接入阿里云百炼 Qwen API；当前本地配置默认使用 `qwen3-coder-next`。
-- [x] CLI 和 GUI 启动时自动读取当前启动目录的 `.env`。
-- [x] 外部进程环境变量优先于 `.env`。
-- [x] `DASHSCOPE_API_KEY` 可自动映射为 Harness 使用的 `OPENAI_API_KEY`。
-- [x] `AGENT_WORKSPACE` 可作为 CLI 和 GUI 的默认工作目录。
-- [x] 新保存的 Agent session 不再持久化模型 API Key。
-- [x] 后台 Agent 通过进程环境继承 API Key，不再将 Key 写入命令行和后台任务记录。
-- [x] `.env` 已被 Git 忽略，并在本地设置为仅当前用户可读写。
-- [x] 已有文件读取、搜索、写入、Shell、后台任务、日志、Session、预算和结构化输出等基础能力。
-- [x] `.env` 加载、Agent runtime、Session、后台任务和模型兼容层等 147 个核心测试通过。
-
-### 当前限制
-
-- `workflow_run` 当前只记录一次运行，不会真正依次执行工作流步骤。
-- `web_fetch` 只适合读取普通 HTTP GET 文本，不能完成带认证的业务 POST、文件上传和幂等调用。
-- 后台任务状态主要表示 Agent 进程是否运行，不代表视频分析或训练任务的真实进度。
-- 当前文件工具主要面向文本；不应使用 `read_file` 将视频内容传给 LLM。
-- 通用 Shell 不是操作系统级沙箱，生产环境不应依赖 Shell 调用业务接口。
-- `.port_sessions` 适合本地调试，不适合作为生产任务数据库。
-- `BUSINESS_API_*`、`TASK_API_*` 和 `VIDEO_*` 环境变量目前只是预留，尚未连接业务工具。
-- 当前本地环境尚未完成 GUI 集成测试所需依赖的部署验证。
-
-### 环境变量约定
-
-| 变量 | 当前状态 | 用途 |
-|---|---|---|
-| `DASHSCOPE_API_KEY` | 已接入 | 阿里云百炼 API Key |
-| `OPENAI_API_KEY` | 已接入 | OpenAI-compatible 客户端实际读取的 Key |
-| `OPENAI_BASE_URL` | 已接入 | 模型服务地址 |
-| `OPENAI_MODEL` | 已接入 | 模型 ID |
-| `AGENT_WORKSPACE` | 已接入 | Agent 默认工作目录 |
-| `BUSINESS_API_BASE_URL` | 预留 | 视频业务接口根地址 |
-| `BUSINESS_API_TOKEN` | 预留 | 视频业务接口凭据 |
-| `TASK_API_BASE_URL` | 预留 | 任务状态服务地址 |
-| `TASK_API_TOKEN` | 预留 | 任务状态服务凭据 |
-| `VIDEO_INPUT_DIR` | 预留 | 视频输入或暂存目录 |
-| `VIDEO_OUTPUT_DIR` | 预留 | 视频结果目录 |
-| `VIDEO_TEMP_DIR` | 预留 | 视频处理中间文件目录 |
-| `TASK_LOG_DIR` | 预留 | 业务任务日志目录 |
-
-### 待开发：P0（最小可行 POC）
-
-- [ ] 定义有限且可校验的 `scenario` 和 `operation` 枚举。
-- [ ] 让 Qwen 输出结构化路由结果：
-  `scenario`、`operation`、`confidence`、`required_inputs`。
-- [ ] 实现 Scenario Registry，统一维护场景、工具、接口和允许使用的模型。
-- [ ] 实现 `submit_video_analysis` 工具。
-- [ ] 实现 `get_analysis_status` 和 `get_analysis_result` 工具。
-- [ ] 实现 `submit_model_training` 工具。
-- [ ] 实现 `get_training_status` 和 `get_training_result` 工具。
-- [ ] 使用 Mock API 模拟分析和训练任务，先验证 Agent 的场景路由与工具选择。
-- [ ] 使用 SQLite 或 PostgreSQL 保存业务任务，而不是依赖 Agent session。
-- [ ] 建立基础异步状态机和可恢复任务执行。
-- [ ] 当场景置信度不足或输入参数缺失时，要求用户确认或补充信息。
-
-建议的初始状态机：
-
-```text
-视频分析：
-uploaded -> classified -> analysis_queued -> analyzing -> succeeded/failed
-
-训练部署：
-training_queued -> training -> validating -> awaiting_approval
-                -> deploying -> active/failed/rolled_back
-```
-
-### 待开发：P1（真实接口接入）
-
-- [ ] 增加视频上传、对象存储和 `video_id` 管理。
-- [ ] 为业务接口实现统一认证、超时、指数退避、限流和错误分类。
-- [ ] 所有创建类接口支持 idempotency key 和请求去重。
-- [ ] 支持业务 Webhook，并验证回调签名。
-- [ ] 对不支持 Webhook 的接口实现低频、可恢复的后台轮询。
-- [ ] 实现任务取消、失败补偿和超时处理。
-- [ ] 将业务 API 地址映射放入注册表，不允许 LLM 提供任意 URL。
-- [ ] 为训练、部署及高成本操作增加明确的审批步骤。
-- [ ] 为 Prompt、文件、任务和业务接口增加用户及项目级授权检查。
-
-### 待开发：P2（模型部署与生产能力）
-
-- [ ] 建立 Model Registry，记录场景、模型版本、训练数据、评估指标和部署状态。
-- [ ] 建立训练结果验收阈值，未达标模型禁止部署。
-- [ ] 支持灰度部署、健康检查、流量切换和自动回滚。
-- [ ] 保留上一稳定模型版本，并支持人工回滚。
-- [ ] 增加 Trace ID、结构化日志、指标、告警和完整操作审计。
-- [ ] 增加多租户数据隔离、配额、并发限制和成本控制。
-- [ ] 使用容器、非 root 用户、只读挂载和网络白名单隔离 Agent。
-- [ ] 针对 Prompt injection、恶意日志内容和越权工具调用建立安全测试。
-- [ ] 对候选 Qwen 模型进行场景分类、工具调用成功率、延迟和成本评测。
-
-### POC 验收标准
-
-首个 POC 至少应满足：
-
-1. 两个不同视频场景可以通过 Prompt 稳定区分。
-2. Agent 只能从注册过的场景、操作和业务工具中选择。
-3. 分析与训练任务可以提交、持久化、恢复和查询。
-4. 重复请求不会创建重复任务。
-5. 低置信度分类不会自动执行。
-6. 训练完成后必须经过指标验证和审批，不能无条件部署。
-7. API Key、业务 Token、视频内容和敏感日志不会进入 Git 或普通任务日志。
-8. Agent 进程重启后仍可从任务数据库恢复真实业务进度。
