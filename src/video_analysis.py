@@ -16,6 +16,8 @@ INFERENCE_API_BASE_URL_ENV = 'INFERENCE_API_BASE_URL'
 SUPPORTED_SCENARIOS = frozenset({'fire_inspection'})
 VIDEO_REF_TYPES = frozenset({'upload_file', 'local_file', 'cos_file'})
 
+_VIDEO_ANALYSIS_STATUSES = frozenset({'pending', 'running', 'done', 'failed'})
+
 _IDEMPOTENCY_DIRECTORY = Path('.port_sessions') / 'business_functions'
 _IDEMPOTENCY_FILE = 'video_analysis_idempotency.json'
 _IDEMPOTENCY_LOCK_FILE = 'video_analysis_idempotency.lock'
@@ -64,6 +66,17 @@ def _predict_endpoint(base_url: str) -> str:
     return f'{normalized}/predict'
 
 
+def _status_endpoint(base_url: str, task_id: str) -> str:
+    normalized = base_url.strip().rstrip('/')
+    if not normalized:
+        raise VideoAnalysisError(
+            f'{INFERENCE_API_BASE_URL_ENV} is required to query video analysis status'
+        )
+    if '://' not in normalized:
+        normalized = f'http://{normalized}'
+    return f'{normalized}/status/{task_id}'
+
+
 def _resolve_uploaded_video(raw_path: str, workspace_root: Path) -> Path:
     candidate = Path(raw_path).expanduser()
     if not candidate.is_absolute():
@@ -88,6 +101,19 @@ def _task_id_from_response(response: httpx.Response) -> str:
     if not isinstance(task_id, str) or not task_id:
         raise VideoAnalysisError('video analysis API response is missing task_id')
     return task_id
+
+
+def _status_from_response(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise VideoAnalysisError('video analysis status API returned invalid JSON') from exc
+    if not isinstance(payload, dict):
+        raise VideoAnalysisError('video analysis status API response must be a JSON object')
+    status = payload.get('status')
+    if not isinstance(status, str) or not status:
+        raise VideoAnalysisError('video analysis status API response is missing status')
+    return status
 
 
 def _post_local_video(endpoint: str, local_path: str, timeout_seconds: float) -> str:
@@ -139,6 +165,20 @@ def _post_cos_video(endpoint: str, cos_path: str, timeout_seconds: float) -> str
     return _task_id_from_response(response)
 
 
+def _get_backend_status(endpoint: str, timeout_seconds: float) -> str:
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(endpoint)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise VideoAnalysisError(f'video analysis status API returned HTTP {status_code}') from exc
+    except httpx.HTTPError as exc:
+        raise VideoAnalysisError(f'failed to call video analysis status API: {exc}') from exc
+
+    return _status_from_response(response)
+
+
 def _read_registry(workspace_root: Path) -> dict[str, Any]:
     """Read the persisted idempotency registry, or return an empty registry."""
     registry_path = workspace_root.resolve() / _IDEMPOTENCY_DIRECTORY / _IDEMPOTENCY_FILE
@@ -173,7 +213,7 @@ def _write_registry(workspace_root: Path, registry: dict[str, Any]) -> None:
         raise VideoAnalysisError(f'failed to persist video-analysis idempotency state: {exc}') from exc
 
 
-def _render_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _render_submit_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return (
         json.dumps(payload, ensure_ascii=False, indent=2),
         {
@@ -183,6 +223,19 @@ def _render_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             'scenario': payload['scenario'],
             'idempotency_key': payload['idempotency_key'],
             'idempotency_replayed': payload['idempotency_replayed'],
+        },
+    )
+
+
+def _render_status_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        {
+            'action': 'get_video_analysis_status',
+            'task_id': payload['task_id'],
+            'status': payload['status'],
+            'is_terminal': payload['is_terminal'],
+            'result_ready': payload['result_ready'],
         },
     )
 
@@ -282,8 +335,9 @@ def submit_video_analysis(
                     'idempotency_key has already been used for a different video-analysis request'
                 )
             response_payload = dict(existing['response'])
+            response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
-            return _render_result(response_payload)
+            return _render_submit_result(response_payload)
 
         if upload_path is None:
             if ref_type == 'cos_file':
@@ -294,7 +348,7 @@ def submit_video_analysis(
             task_id = _post_uploaded_video(endpoint, upload_path, timeout_seconds)
         response_payload = {
             'task_id': task_id,
-            'status': 'queued',
+            'status': 'pending',
             'scenario': scenario,
             'video_ref': {
                 'type': ref_type,
@@ -309,4 +363,31 @@ def submit_video_analysis(
         }
         _write_registry(workspace_root, registry)
 
-    return _render_result(response_payload)
+    return _render_submit_result(response_payload)
+
+
+def get_video_analysis_status(
+    arguments: dict[str, Any],
+    *,
+    timeout_seconds: float,
+    base_url: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Query and normalize the current state of a video-analysis task."""
+    task_id = _require_string(arguments, 'task_id')
+    endpoint = _status_endpoint(
+        base_url or os.environ.get(INFERENCE_API_BASE_URL_ENV, ''),
+        task_id,
+    )
+    status = _get_backend_status(endpoint, timeout_seconds)
+    if status not in _VIDEO_ANALYSIS_STATUSES:
+        raise VideoAnalysisError(
+            f'video analysis status API returned unsupported status {status!r}'
+        )
+
+    payload = {
+        'task_id': task_id,
+        'status': status,
+        'is_terminal': status in {'done', 'failed'},
+        'result_ready': status == 'done',
+    }
+    return _render_status_result(payload)

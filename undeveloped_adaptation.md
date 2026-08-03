@@ -58,8 +58,10 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 - [x] 已有文件读取、搜索、写入、Shell、后台任务、日志、Session、预算和结构化输出等基础能力。
 - [x] 已注册 `submit_video_analysis` 业务 Function，可将视频处理服务器上的
   本地视频路径作为 `filepath` 提交至已部署的 `/predict` 异步分析接口。
-- [x] `submit_video_analysis` 已预留 `upload_file` / `local_file` / `cos_file` Contract，
-  当前三种引用方式均已实现，并使用本地持久化映射实现 POC 幂等重放。
+- [x] 已实现 `submit_video_analysis` 工具的 `local_file`、`upload_file`
+  和 `cos_file` POC，并使用本地持久化映射实现幂等重放。
+- [x] 已实现 `get_video_analysis_status` 工具，直接返回推理后端的
+  `pending` / `running` / `done` / `failed` 任务状态。
 - [x] `.env` 加载、Agent runtime、Session、后台任务和模型兼容层等 147 个核心测试通过。
 
 ## 当前限制
@@ -87,7 +89,7 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 | `OPENAI_BASE_URL` | 已接入 | 模型服务地址 |
 | `OPENAI_MODEL` | 已接入 | 模型 ID |
 | `AGENT_WORKSPACE` | 已接入 | Agent 默认工作目录 |
-| `INFERENCE_API_BASE_URL` | 已接入 | 视频推理接口根地址；Function 调用 `<base_url>/predict` |
+| `INFERENCE_API_BASE_URL` | 已接入 | 视频推理接口根地址；Functions 调用 `<base_url>/predict` 和 `<base_url>/status/{task_id}` |
 | `BUSINESS_API_TOKEN` | 预留 | 视频业务接口凭据 |
 | `TASK_API_BASE_URL` | 预留 | 任务状态服务地址 |
 | `TASK_API_TOKEN` | 预留 | 任务状态服务凭据 |
@@ -161,9 +163,7 @@ first draft。它暂时保存在 Harness 仓库中用于版本管理，尚未作
 - [ ] 让 Qwen 输出结构化路由结果：
   `scenario`、`operation`、`confidence`、`required_inputs`。
 - [ ] 实现 Scenario Registry，统一维护场景、工具、接口和允许使用的模型。
-- [x] 实现 `submit_video_analysis` 工具的 `local_file`、`upload_file`
-  和 `cos_file` POC。
-- [ ] 实现 `get_analysis_status` 和 `get_analysis_result` 工具。
+- [ ] 实现 `get_video_analysis_result` 工具。
 - [ ] 实现 `submit_model_training` 工具。
 - [ ] 实现 `get_training_status` 和 `get_training_result` 工具。
 - [ ] 使用 Mock API 模拟分析和训练任务，先验证 Agent 的场景路由与工具选择。

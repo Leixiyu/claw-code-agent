@@ -311,7 +311,7 @@ claw-code-agent/
 | 🐍 Python | `3.10` or higher |
 | 🪶 Core client | The model client and `.env` loader use the Python standard library |
 | 🖥️ GUI runtime | FastAPI, Uvicorn, and Pydantic; installed by `pip install -e .` or `pip install -r requirements.txt` |
-| 🌐 Business HTTP | HTTPX; used by `submit_video_analysis` to call the video-analysis API |
+| 🌐 Business HTTP | HTTPX; used by video submission and status-query Functions |
 | 🧪 GUI tests | HTTPX also supports the FastAPI/Starlette test client |
 | 🖥️ Model Server | `vLLM`, `Ollama`, `LiteLLM Proxy`, or `OpenRouter`, with tool calling support |
 | 🧠 Model | [`Qwen/Qwen3-Coder-30B-A3B-Instruct`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) (recommended) |

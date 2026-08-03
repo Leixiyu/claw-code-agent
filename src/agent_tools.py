@@ -269,6 +269,24 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_submit_video_analysis,
         ),
         AgentTool(
+            name='get_video_analysis_status',
+            description=(
+                'Query the current status of a previously submitted video-analysis task.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'Task ID returned by submit_video_analysis.',
+                    },
+                },
+                'required': ['task_id'],
+                'additionalProperties': False,
+            },
+            handler=_get_video_analysis_status,
+        ),
+        AgentTool(
             name='list_dir',
             description='List files and directories under a workspace path.',
             parameters={
@@ -1314,6 +1332,21 @@ def _submit_video_analysis(
         return submit_video_analysis(
             arguments,
             workspace_root=context.root,
+            timeout_seconds=context.command_timeout_seconds,
+        )
+    except VideoAnalysisError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _get_video_analysis_status(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .video_analysis import VideoAnalysisError, get_video_analysis_status
+
+    try:
+        return get_video_analysis_status(
+            arguments,
             timeout_seconds=context.command_timeout_seconds,
         )
     except VideoAnalysisError as exc:

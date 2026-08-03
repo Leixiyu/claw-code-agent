@@ -24,8 +24,14 @@ class _FakeResponse:
         return {'task_id': 'task-123'}
 
 
+class _FakeStatusResponse(_FakeResponse):
+    def json(self) -> dict[str, str]:
+        return {'status': _FakeClient.backend_status}
+
+
 class _FakeClient:
     calls: list[tuple[str, dict[str, object]]] = []
+    backend_status = 'running'
 
     def __init__(self, *, timeout: float) -> None:
         self.timeout = timeout
@@ -40,18 +46,28 @@ class _FakeClient:
         self.calls.append((url, kwargs))
         return _FakeResponse()
 
+    def get(self, url: str) -> _FakeStatusResponse:
+        self.calls.append((url, {}))
+        return _FakeStatusResponse()
+
 
 class VideoAnalysisToolTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeClient.calls = []
+        _FakeClient.backend_status = 'running'
 
-    def _execute(self, workspace: Path, arguments: dict[str, object]):
+    def _execute(
+        self,
+        workspace: Path,
+        arguments: dict[str, object],
+        tool_name: str = 'submit_video_analysis',
+    ):
         registry = default_tool_registry()
         context = build_tool_context(
             AgentRuntimeConfig(cwd=workspace),
             tool_registry=registry,
         )
-        return execute_tool(registry, 'submit_video_analysis', arguments, context)
+        return execute_tool(registry, tool_name, arguments, context)
 
     def test_schema_lists_all_video_reference_types(self) -> None:
         tool = default_tool_registry()['submit_video_analysis']
@@ -62,6 +78,66 @@ class VideoAnalysisToolTests(unittest.TestCase):
             ['upload_file', 'local_file', 'cos_file'],
         )
         self.assertNotIn('processing_profile', tool.parameters['properties'])
+
+    def test_status_schema_requires_only_task_id(self) -> None:
+        tool = default_tool_registry()['get_video_analysis_status']
+
+        self.assertEqual(tool.parameters['required'], ['task_id'])
+        self.assertEqual(set(tool.parameters['properties']), {'task_id'})
+
+    def test_returns_backend_analysis_statuses_unchanged(self) -> None:
+        expected_statuses = {
+            'pending': (False, False),
+            'running': (False, False),
+            'done': (True, True),
+            'failed': (True, False),
+        }
+        for backend_status, expected in expected_statuses.items():
+            with self.subTest(backend_status=backend_status):
+                _FakeClient.calls = []
+                _FakeClient.backend_status = backend_status
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {'INFERENCE_API_BASE_URL': 'video.test:8000'},
+                        ),
+                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                    ):
+                        result = self._execute(
+                            Path(tmp_dir),
+                            {'task_id': 'task-123'},
+                            'get_video_analysis_status',
+                        )
+
+                payload = json.loads(result.content)
+                is_terminal, result_ready = expected
+                self.assertTrue(result.ok)
+                self.assertEqual(payload['task_id'], 'task-123')
+                self.assertEqual(payload['status'], backend_status)
+                self.assertNotIn('backend_status', payload)
+                self.assertEqual(payload['is_terminal'], is_terminal)
+                self.assertEqual(payload['result_ready'], result_ready)
+                self.assertEqual(
+                    _FakeClient.calls,
+                    [('http://video.test:8000/status/task-123', {})],
+                )
+
+    def test_rejects_unknown_backend_analysis_status(self) -> None:
+        _FakeClient.backend_status = 'unknown'
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with (
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(
+                    Path(tmp_dir),
+                    {'task_id': 'task-123'},
+                    'get_video_analysis_status',
+                )
+
+        self.assertFalse(result.ok)
+        self.assertIn("unsupported status 'unknown'", result.content)
 
     def test_submits_local_file_without_processing_parameters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -81,7 +157,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(payload['task_id'], 'task-123')
-        self.assertEqual(payload['status'], 'queued')
+        self.assertEqual(payload['status'], 'pending')
         self.assertFalse(payload['idempotency_replayed'])
         self.assertEqual(len(_FakeClient.calls), 1)
         url, kwargs = _FakeClient.calls[0]
@@ -154,6 +230,8 @@ class VideoAnalysisToolTests(unittest.TestCase):
         self.assertTrue(second.ok)
         self.assertFalse(first_payload['idempotency_replayed'])
         self.assertTrue(second_payload['idempotency_replayed'])
+        self.assertEqual(first_payload['status'], 'pending')
+        self.assertEqual(second_payload['status'], 'pending')
         self.assertEqual(second_payload['task_id'], first_payload['task_id'])
         self.assertEqual(len(_FakeClient.calls), 1)
 
