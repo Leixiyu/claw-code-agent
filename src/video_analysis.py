@@ -12,7 +12,7 @@ from typing import Any, Iterator
 import httpx
 
 
-VIDEO_ANALYSIS_BASE_URL_ENV = 'BUSINESS_API_BASE_URL'
+INFERENCE_API_BASE_URL_ENV = 'INFERENCE_API_BASE_URL'
 SUPPORTED_SCENARIOS = frozenset({'fire_inspection'})
 VIDEO_REF_TYPES = frozenset({'upload_file', 'local_file', 'cos_file'})
 
@@ -57,7 +57,7 @@ def _predict_endpoint(base_url: str) -> str:
     normalized = base_url.strip().rstrip('/')
     if not normalized:
         raise VideoAnalysisError(
-            f'{VIDEO_ANALYSIS_BASE_URL_ENV} is required to submit video analysis'
+            f'{INFERENCE_API_BASE_URL_ENV} is required to submit video analysis'
         )
     if '://' not in normalized:
         normalized = f'http://{normalized}'
@@ -267,7 +267,7 @@ def submit_video_analysis(
     idempotency_key = _require_string(arguments, 'idempotency_key')
     _validate_idempotency_key(idempotency_key, video_name, scenario)
 
-    endpoint = _predict_endpoint(base_url or os.environ.get(VIDEO_ANALYSIS_BASE_URL_ENV, ''))
+    endpoint = _predict_endpoint(base_url or os.environ.get(INFERENCE_API_BASE_URL_ENV, ''))
     request_fingerprint = {
         'scenario': scenario,
         'video_ref': request_video_ref,

@@ -74,7 +74,7 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
   以及从 Agent Harness 服务器 multipart 上传的 `upload_file`；
   `cos_file` 会将 COS 路径原样传给视频处理服务器的 `cos_filepath`。
 - POC 幂等映射仍保存在 `.port_sessions`，还没有实现生产级跨实例任务库。
-- `BUSINESS_API_BASE_URL` 已连接视频提交 Function；其他 `BUSINESS_API_*`、
+- `INFERENCE_API_BASE_URL` 已连接视频提交 Function；其他 `BUSINESS_API_*`、
   `TASK_API_*` 和 `VIDEO_*` 配置仍为预留。
 - 当前本地环境尚未完成 GUI 集成测试所需依赖的部署验证。
 
@@ -87,7 +87,7 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 | `OPENAI_BASE_URL` | 已接入 | 模型服务地址 |
 | `OPENAI_MODEL` | 已接入 | 模型 ID |
 | `AGENT_WORKSPACE` | 已接入 | Agent 默认工作目录 |
-| `BUSINESS_API_BASE_URL` | 已接入 | 视频分析接口根地址；Function 调用 `<base_url>/predict` |
+| `INFERENCE_API_BASE_URL` | 已接入 | 视频推理接口根地址；Function 调用 `<base_url>/predict` |
 | `BUSINESS_API_TOKEN` | 预留 | 视频业务接口凭据 |
 | `TASK_API_BASE_URL` | 预留 | 任务状态服务地址 |
 | `TASK_API_TOKEN` | 预留 | 任务状态服务凭据 |

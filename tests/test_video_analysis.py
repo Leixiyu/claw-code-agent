@@ -72,7 +72,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'BUSINESS_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
@@ -99,7 +99,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'BUSINESS_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
@@ -141,7 +141,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'BUSINESS_API_BASE_URL': 'http://video.test:8000'}),
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'http://video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 first = self._execute(workspace, arguments)
@@ -166,7 +166,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'BUSINESS_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
@@ -186,7 +186,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
             video_system_path = str(Path(workspace_dir) / 'missing-on-agent-server.mp4')
             self.assertFalse(Path(video_system_path).exists())
             with (
-                patch.dict(os.environ, {'BUSINESS_API_BASE_URL': 'http://video.test:8000'}),
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'http://video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
@@ -263,7 +263,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
                 )
 
         self.assertFalse(result.ok)
-        self.assertIn('BUSINESS_API_BASE_URL is required', result.content)
+        self.assertIn('INFERENCE_API_BASE_URL is required', result.content)
 
 
 if __name__ == '__main__':
