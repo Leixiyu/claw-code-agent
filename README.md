@@ -247,7 +247,7 @@ claw-code-agent/
 │   ├── main.py                   # CLI entry point & argument parsing
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
-│   ├── video_analysis.py         # Video filepath/upload Function and POC idempotency
+│   ├── video_analysis.py         # Video filepath/upload/COS Function and POC idempotency
 │   ├── agent_prompting.py        # System prompt assembly
 │   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
 │   ├── agent_context.py          # Context building & CLAUDE.md discovery

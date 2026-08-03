@@ -59,7 +59,7 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 - [x] 已注册 `submit_video_analysis` 业务 Function，可将视频处理服务器上的
   本地视频路径作为 `filepath` 提交至已部署的 `/predict` 异步分析接口。
 - [x] `submit_video_analysis` 已预留 `upload_file` / `local_file` / `cos_file` Contract，
-  当前已实现 `local_file` 和 `upload_file`，并使用本地持久化映射实现 POC 幂等重放。
+  当前三种引用方式均已实现，并使用本地持久化映射实现 POC 幂等重放。
 - [x] `.env` 加载、Agent runtime、Session、后台任务和模型兼容层等 147 个核心测试通过。
 
 ## 当前限制
@@ -72,7 +72,7 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 - `.port_sessions` 适合本地调试，不适合作为生产任务数据库。
 - `submit_video_analysis` 已实现由视频处理服务器解析路径的 `local_file`，
   以及从 Agent Harness 服务器 multipart 上传的 `upload_file`；
-  对象存储 `cos_file` 仍只完成 Contract 预留。
+  `cos_file` 会将 COS 路径原样传给视频处理服务器的 `cos_filepath`。
 - POC 幂等映射仍保存在 `.port_sessions`，还没有实现生产级跨实例任务库。
 - `BUSINESS_API_BASE_URL` 已连接视频提交 Function；其他 `BUSINESS_API_*`、
   `TASK_API_*` 和 `VIDEO_*` 配置仍为预留。
@@ -161,8 +161,8 @@ first draft。它暂时保存在 Harness 仓库中用于版本管理，尚未作
 - [ ] 让 Qwen 输出结构化路由结果：
   `scenario`、`operation`、`confidence`、`required_inputs`。
 - [ ] 实现 Scenario Registry，统一维护场景、工具、接口和允许使用的模型。
-- [x] 实现 `submit_video_analysis` 工具的 `local_file` 和 `upload_file` POC，
-  预留 `cos_file`。
+- [x] 实现 `submit_video_analysis` 工具的 `local_file`、`upload_file`
+  和 `cos_file` POC。
 - [ ] 实现 `get_analysis_status` 和 `get_analysis_result` 工具。
 - [ ] 实现 `submit_model_training` 工具。
 - [ ] 实现 `get_training_status` 和 `get_training_result` 工具。

@@ -125,6 +125,20 @@ def _post_uploaded_video(endpoint: str, upload_path: Path, timeout_seconds: floa
     return _task_id_from_response(response)
 
 
+def _post_cos_video(endpoint: str, cos_path: str, timeout_seconds: float) -> str:
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(endpoint, params={'cos_filepath': cos_path})
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise VideoAnalysisError(f'video analysis API returned HTTP {status_code}') from exc
+    except httpx.HTTPError as exc:
+        raise VideoAnalysisError(f'failed to call video analysis API: {exc}') from exc
+
+    return _task_id_from_response(response)
+
+
 def _read_registry(workspace_root: Path) -> dict[str, Any]:
     """Read the persisted idempotency registry, or return an empty registry."""
     registry_path = workspace_root.resolve() / _IDEMPOTENCY_DIRECTORY / _IDEMPOTENCY_FILE
@@ -210,8 +224,9 @@ def submit_video_analysis(
     ``local_file`` is a path visible to the video-analysis server and is sent
     through the ``filepath`` query parameter. ``upload_file`` is a path visible
     to the Agent Harness server and is sent as multipart file content.
-    ``cos_file`` remains reserved. The downstream ``/predict`` endpoint's
-    default processing parameters remain authoritative.
+    ``cos_file`` is passed through the ``cos_filepath`` query parameter without
+    path validation. The downstream ``/predict`` endpoint's default processing
+    parameters remain authoritative.
     """
 
     scenario = _require_string(arguments, 'scenario')
@@ -230,11 +245,6 @@ def submit_video_analysis(
             f'unsupported video_ref.type {ref_type!r}; expected one of: '
             f'{", ".join(sorted(VIDEO_REF_TYPES))}'
         )
-    if ref_type == 'cos_file':
-        raise VideoAnalysisError(
-            f'video_ref.type {ref_type!r} is reserved by the contract but is not implemented yet'
-        )
-
     raw_path = _require_string(video_ref, 'path')
     if ref_type == 'upload_file':
         upload_path = _resolve_uploaded_video(raw_path, workspace_root)
@@ -276,7 +286,10 @@ def submit_video_analysis(
             return _render_result(response_payload)
 
         if upload_path is None:
-            task_id = _post_local_video(endpoint, raw_path, timeout_seconds)
+            if ref_type == 'cos_file':
+                task_id = _post_cos_video(endpoint, raw_path, timeout_seconds)
+            else:
+                task_id = _post_local_video(endpoint, raw_path, timeout_seconds)
         else:
             task_id = _post_uploaded_video(endpoint, upload_path, timeout_seconds)
         response_payload = {

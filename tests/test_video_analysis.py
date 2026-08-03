@@ -53,7 +53,7 @@ class VideoAnalysisToolTests(unittest.TestCase):
         )
         return execute_tool(registry, 'submit_video_analysis', arguments, context)
 
-    def test_schema_reserves_all_video_reference_types(self) -> None:
+    def test_schema_lists_all_video_reference_types(self) -> None:
         tool = default_tool_registry()['submit_video_analysis']
         ref_type = tool.parameters['properties']['video_ref']['properties']['type']
 
@@ -157,19 +157,29 @@ class VideoAnalysisToolTests(unittest.TestCase):
         self.assertEqual(second_payload['task_id'], first_payload['task_id'])
         self.assertEqual(len(_FakeClient.calls), 1)
 
-    def test_rejects_reserved_reference_type(self) -> None:
+    def test_passes_cos_file_path_without_normalization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            result = self._execute(
-                Path(tmp_dir),
-                {
-                    'scenario': 'fire_inspection',
-                    'video_ref': {'type': 'cos_file', 'path': 'cos://bucket/test.mp4'},
-                    'idempotency_key': 'test-fire_inspection-260101-120000',
-                },
-            )
+            workspace = Path(tmp_dir)
+            arguments = {
+                'scenario': 'fire_inspection',
+                'video_ref': {'type': 'cos_file', 'path': 'cos://bucket/path/test.mp4'},
+                'idempotency_key': 'test-fire_inspection-260101-120000',
+            }
+            with (
+                patch.dict(os.environ, {'BUSINESS_API_BASE_URL': 'video.test:8000'}),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(workspace, arguments)
 
-        self.assertFalse(result.ok)
-        self.assertIn('reserved by the contract but is not implemented', result.content)
+        self.assertTrue(result.ok)
+        self.assertEqual(json.loads(result.content)['task_id'], 'task-123')
+        self.assertEqual(len(_FakeClient.calls), 1)
+        url, kwargs = _FakeClient.calls[0]
+        self.assertEqual(url, 'http://video.test:8000/predict')
+        self.assertEqual(
+            kwargs,
+            {'params': {'cos_filepath': 'cos://bucket/path/test.mp4'}},
+        )
 
     def test_local_file_does_not_need_to_exist_on_agent_server(self) -> None:
         with tempfile.TemporaryDirectory() as workspace_dir:
