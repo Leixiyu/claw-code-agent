@@ -1,8 +1,9 @@
 # 视频处理 Agent：当前进度与待开发适配需求
 
 > 本文档是项目接入视频业务的阶段性记录，初始快照日期为 **2026-07-25**，
-> 最近更新日期为 **2026-07-30**。
-> 当前目标是先完成本地 Agent Harness 的部署和验证；视频处理项目、业务接口及模型服务仍在设计中。
+> 最近更新日期为 **2026-08-03**。
+> 当前目标是先基于已部署的视频分析 Pipeline 开发和验证受控业务 Functions，
+> 再逐步接入任务状态、结果查询、训练和部署流程。
 
 ## 目标业务
 
@@ -55,6 +56,10 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 - [x] 后台 Agent 通过进程环境继承 API Key，不再将 Key 写入命令行和后台任务记录。
 - [x] `.env` 已被 Git 忽略，并在本地设置为仅当前用户可读写。
 - [x] 已有文件读取、搜索、写入、Shell、后台任务、日志、Session、预算和结构化输出等基础能力。
+- [x] 已注册 `submit_video_analysis` 业务 Function，可将视频处理服务器上的
+  本地视频路径作为 `filepath` 提交至已部署的 `/predict` 异步分析接口。
+- [x] `submit_video_analysis` 已预留 `upload_file` / `local_file` / `cos_file` Contract，
+  当前只执行 `local_file`，并使用本地持久化映射实现 POC 幂等重放。
 - [x] `.env` 加载、Agent runtime、Session、后台任务和模型兼容层等 147 个核心测试通过。
 
 ## 当前限制
@@ -65,7 +70,12 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 - 当前文件工具主要面向文本；不应使用 `read_file` 将视频内容传给 LLM。
 - 通用 Shell 不是操作系统级沙箱，生产环境不应依赖 Shell 调用业务接口。
 - `.port_sessions` 适合本地调试，不适合作为生产任务数据库。
-- `BUSINESS_API_*`、`TASK_API_*` 和 `VIDEO_*` 环境变量目前只是预留，尚未连接业务工具。
+- `submit_video_analysis` 目前只实现 `local_file`，该路径由视频处理服务器解析；
+  对应 Agent Harness 服务器文件的 `upload_file` 和对象存储的 `cos_file`
+  只完成了 Contract 预留。
+- POC 幂等映射仍保存在 `.port_sessions`，还没有实现生产级跨实例任务库。
+- `BUSINESS_API_BASE_URL` 已连接视频提交 Function；其他 `BUSINESS_API_*`、
+  `TASK_API_*` 和 `VIDEO_*` 配置仍为预留。
 - 当前本地环境尚未完成 GUI 集成测试所需依赖的部署验证。
 
 ## 环境变量约定
@@ -77,7 +87,7 @@ Shell 命令或模型部署命令。场景到接口、模型和工作流的映�
 | `OPENAI_BASE_URL` | 已接入 | 模型服务地址 |
 | `OPENAI_MODEL` | 已接入 | 模型 ID |
 | `AGENT_WORKSPACE` | 已接入 | Agent 默认工作目录 |
-| `BUSINESS_API_BASE_URL` | 预留 | 视频业务接口根地址 |
+| `BUSINESS_API_BASE_URL` | 已接入 | 视频分析接口根地址；Function 调用 `<base_url>/predict` |
 | `BUSINESS_API_TOKEN` | 预留 | 视频业务接口凭据 |
 | `TASK_API_BASE_URL` | 预留 | 任务状态服务地址 |
 | `TASK_API_TOKEN` | 预留 | 任务状态服务凭据 |
@@ -151,7 +161,7 @@ first draft。它暂时保存在 Harness 仓库中用于版本管理，尚未作
 - [ ] 让 Qwen 输出结构化路由结果：
   `scenario`、`operation`、`confidence`、`required_inputs`。
 - [ ] 实现 Scenario Registry，统一维护场景、工具、接口和允许使用的模型。
-- [ ] 实现 `submit_video_analysis` 工具。
+- [x] 实现 `submit_video_analysis` 工具的 `local_file` POC，预留其他视频引用类型。
 - [ ] 实现 `get_analysis_status` 和 `get_analysis_result` 工具。
 - [ ] 实现 `submit_model_training` 工具。
 - [ ] 实现 `get_training_status` 和 `get_training_result` 工具。

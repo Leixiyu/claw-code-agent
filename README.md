@@ -247,6 +247,7 @@ claw-code-agent/
 │   ├── main.py                   # CLI entry point & argument parsing
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
+│   ├── video_analysis.py         # Video-analysis Function, filepath submission, and POC idempotency
 │   ├── agent_prompting.py        # System prompt assembly
 │   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
 │   ├── agent_context.py          # Context building & CLAUDE.md discovery
@@ -291,6 +292,7 @@ claw-code-agent/
 │       └── static/               # index.html, app.css, app.js
 └── tests/                        # Unit tests
     ├── test_agent_runtime.py
+    ├── test_video_analysis.py
     ├── test_agent_context.py
     ├── test_agent_context_usage.py
     ├── test_agent_prompting.py
@@ -309,7 +311,8 @@ claw-code-agent/
 | 🐍 Python | `3.10` or higher |
 | 🪶 Core client | The model client and `.env` loader use the Python standard library |
 | 🖥️ GUI runtime | FastAPI, Uvicorn, and Pydantic; installed by `pip install -e .` or `pip install -r requirements.txt` |
-| 🧪 GUI tests | HTTPX; included in `requirements.txt` for the FastAPI/Starlette test client |
+| 🌐 Business HTTP | HTTPX; used by `submit_video_analysis` to call the video-analysis API |
+| 🧪 GUI tests | HTTPX also supports the FastAPI/Starlette test client |
 | 🖥️ Model Server | `vLLM`, `Ollama`, `LiteLLM Proxy`, or `OpenRouter`, with tool calling support |
 | 🧠 Model | [`Qwen/Qwen3-Coder-30B-A3B-Instruct`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) (recommended) |
 
@@ -832,9 +835,9 @@ Paste anything ≥500 characters into the composer (a logfile, a stack trace, an
 
 > **Note:** The GUI uses [FastAPI](https://fastapi.tiangolo.com/),
 > [Uvicorn](https://www.uvicorn.org/), and Pydantic. These are installed by
-> `pip install -e .`; `requirements.txt` also installs HTTPX for the GUI test
-> suite. The model client and `.env` loader themselves use only Python's
-> standard library.
+> `pip install -e .`; `requirements.txt` also installs HTTPX for the video-analysis
+> business Function and GUI test suite. The model client and `.env` loader themselves
+> use only Python's standard library.
 
 ---
 

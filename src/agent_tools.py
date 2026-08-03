@@ -215,6 +215,58 @@ def execute_tool_streaming(
 def default_tool_registry() -> dict[str, AgentTool]:
     tools = [
         AgentTool(
+            name='submit_video_analysis',
+            description=(
+                'Submit a video to the asynchronous analysis pipeline. '
+                'Only video-server-local local_file is implemented; '
+                'upload_file and cos_file are reserved. '
+                'The idempotency key must be created by the application, not invented by the LLM.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'scenario': {
+                        'type': 'string',
+                        'enum': ['fire_inspection'],
+                        'description': 'Registered video-analysis business scenario.',
+                    },
+                    'video_ref': {
+                        'type': 'object',
+                        'properties': {
+                            'type': {
+                                'type': 'string',
+                                'enum': ['upload_file', 'local_file', 'cos_file'],
+                                'description': (
+                                    'Video reference type. Only local_file is implemented currently.'
+                                ),
+                            },
+                            'path': {
+                                'type': 'string',
+                                'description': (
+                                    'For local_file, a path visible to the video-analysis server. '
+                                    'For future upload_file, a path on the Agent Harness server. '
+                                    'For future cos_file, a COS object path.'
+                                ),
+                            },
+                        },
+                        'required': ['type', 'path'],
+                        'additionalProperties': False,
+                    },
+                    'idempotency_key': {
+                        'type': 'string',
+                        'description': (
+                            'Application-created key in the format '
+                            '<video-name>-<scenario>-YYMMDD-HHMMSS, for example '
+                            'test-fire_inspection-260803-112423.'
+                        ),
+                    },
+                },
+                'required': ['scenario', 'video_ref', 'idempotency_key'],
+                'additionalProperties': False,
+            },
+            handler=_submit_video_analysis,
+        ),
+        AgentTool(
             name='list_dir',
             description='List files and directories under a workspace path.',
             parameters={
@@ -1248,6 +1300,22 @@ def default_tool_registry() -> dict[str, AgentTool]:
         ),
     ]
     return {tool.name: tool for tool in tools}
+
+
+def _submit_video_analysis(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .video_analysis import VideoAnalysisError, submit_video_analysis
+
+    try:
+        return submit_video_analysis(
+            arguments,
+            workspace_root=context.root,
+            timeout_seconds=context.command_timeout_seconds,
+        )
+    except VideoAnalysisError as exc:
+        raise ToolExecutionError(str(exc)) from exc
 
 
 def serialize_tool_result(result: ToolExecutionResult) -> str:
