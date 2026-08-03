@@ -36,8 +36,8 @@ class _FakeClient:
     def __exit__(self, *args: object) -> None:
         return None
 
-    def post(self, url: str, *, params: dict[str, object]) -> _FakeResponse:
-        self.calls.append((url, params))
+    def post(self, url: str, **kwargs: object) -> _FakeResponse:
+        self.calls.append((url, kwargs))
         return _FakeResponse()
 
 
@@ -84,9 +84,53 @@ class VideoAnalysisToolTests(unittest.TestCase):
         self.assertEqual(payload['status'], 'queued')
         self.assertFalse(payload['idempotency_replayed'])
         self.assertEqual(len(_FakeClient.calls), 1)
-        url, params = _FakeClient.calls[0]
+        url, kwargs = _FakeClient.calls[0]
         self.assertEqual(url, 'http://video.test:8000/predict')
-        self.assertEqual(params, {'filepath': '/video/input/test.mp4'})
+        self.assertEqual(kwargs, {'params': {'filepath': '/video/input/test.mp4'}})
+
+    def test_uploads_agent_server_file_as_multipart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            upload_path = workspace / 'test.mp4'
+            upload_path.write_bytes(b'fake video')
+            arguments = {
+                'scenario': 'fire_inspection',
+                'video_ref': {'type': 'upload_file', 'path': 'test.mp4'},
+                'idempotency_key': 'test-fire_inspection-260101-120000',
+            }
+            with (
+                patch.dict(os.environ, {'BUSINESS_API_BASE_URL': 'video.test:8000'}),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(workspace, arguments)
+
+            payload = json.loads(result.content)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(payload['task_id'], 'task-123')
+        self.assertEqual(payload['video_ref'], {'type': 'upload_file', 'path': 'test.mp4'})
+        self.assertEqual(len(_FakeClient.calls), 1)
+        url, kwargs = _FakeClient.calls[0]
+        self.assertEqual(url, 'http://video.test:8000/predict')
+        self.assertEqual(set(kwargs), {'files'})
+        filename, video_file, content_type = kwargs['files']['file']
+        self.assertEqual(filename, 'test.mp4')
+        self.assertTrue(video_file.closed)
+        self.assertEqual(content_type, 'video/mp4')
+
+    def test_rejects_missing_agent_server_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            result = self._execute(
+                Path(tmp_dir),
+                {
+                    'scenario': 'fire_inspection',
+                    'video_ref': {'type': 'upload_file', 'path': 'missing.mp4'},
+                    'idempotency_key': 'missing-fire_inspection-260101-120000',
+                },
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn('uploaded video file was not found', result.content)
 
     def test_reuses_task_for_same_idempotency_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

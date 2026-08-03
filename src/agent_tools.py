@@ -218,8 +218,9 @@ def default_tool_registry() -> dict[str, AgentTool]:
             name='submit_video_analysis',
             description=(
                 'Submit a video to the asynchronous analysis pipeline. '
-                'Only video-server-local local_file is implemented; '
-                'upload_file and cos_file are reserved. '
+                'local_file references a path on the video-analysis server; '
+                'upload_file uploads a path from the Agent Harness server; '
+                'cos_file is reserved. '
                 'The idempotency key must be created by the application, not invented by the LLM.'
             ),
             parameters={
@@ -237,14 +238,15 @@ def default_tool_registry() -> dict[str, AgentTool]:
                                 'type': 'string',
                                 'enum': ['upload_file', 'local_file', 'cos_file'],
                                 'description': (
-                                    'Video reference type. Only local_file is implemented currently.'
+                                    'Video reference type. local_file and upload_file are implemented; '
+                                    'cos_file is reserved.'
                                 ),
                             },
                             'path': {
                                 'type': 'string',
                                 'description': (
                                     'For local_file, a path visible to the video-analysis server. '
-                                    'For future upload_file, a path on the Agent Harness server. '
+                                    'For upload_file, a path on the Agent Harness server. '
                                     'For future cos_file, a COS object path.'
                                 ),
                             },

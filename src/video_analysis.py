@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import threading
 from contextlib import contextmanager
@@ -63,6 +64,32 @@ def _predict_endpoint(base_url: str) -> str:
     return f'{normalized}/predict'
 
 
+def _resolve_uploaded_video(raw_path: str, workspace_root: Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = workspace_root.resolve() / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise VideoAnalysisError(f'uploaded video file was not found: {raw_path!r}') from exc
+    if not resolved.is_file():
+        raise VideoAnalysisError(f'uploaded video path is not a regular file: {raw_path!r}')
+    return resolved
+
+
+def _task_id_from_response(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise VideoAnalysisError('video analysis API returned invalid JSON') from exc
+    if not isinstance(payload, dict):
+        raise VideoAnalysisError('video analysis API response must be a JSON object')
+    task_id = payload.get('task_id')
+    if not isinstance(task_id, str) or not task_id:
+        raise VideoAnalysisError('video analysis API response is missing task_id')
+    return task_id
+
+
 def _post_local_video(endpoint: str, local_path: str, timeout_seconds: float) -> str:
     try:
         with httpx.Client(timeout=timeout_seconds) as client:
@@ -74,16 +101,28 @@ def _post_local_video(endpoint: str, local_path: str, timeout_seconds: float) ->
     except httpx.HTTPError as exc:
         raise VideoAnalysisError(f'failed to call video analysis API: {exc}') from exc
 
+    return _task_id_from_response(response)
+
+
+def _post_uploaded_video(endpoint: str, upload_path: Path, timeout_seconds: float) -> str:
+    content_type = mimetypes.guess_type(upload_path.name)[0] or 'application/octet-stream'
     try:
-        payload = response.json()
-    except ValueError as exc:
-        raise VideoAnalysisError('video analysis API returned invalid JSON') from exc
-    if not isinstance(payload, dict):
-        raise VideoAnalysisError('video analysis API response must be a JSON object')
-    task_id = payload.get('task_id')
-    if not isinstance(task_id, str) or not task_id:
-        raise VideoAnalysisError('video analysis API response is missing task_id')
-    return task_id
+        with upload_path.open('rb') as video_file:
+            with httpx.Client(timeout=timeout_seconds) as client:
+                response = client.post(
+                    endpoint,
+                    files={'file': (upload_path.name, video_file, content_type)},
+                )
+                response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise VideoAnalysisError(f'video analysis API returned HTTP {status_code}') from exc
+    except httpx.HTTPError as exc:
+        raise VideoAnalysisError(f'failed to call video analysis API: {exc}') from exc
+    except OSError as exc:
+        raise VideoAnalysisError(f'failed to read uploaded video: {exc}') from exc
+
+    return _task_id_from_response(response)
 
 
 def _read_registry(workspace_root: Path) -> dict[str, Any]:
@@ -166,14 +205,13 @@ def submit_video_analysis(
     timeout_seconds: float,
     base_url: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Submit a video-system-local path to the asynchronous analysis pipeline.
+    """Submit a video reference to the asynchronous analysis pipeline.
 
-    The public Function contract already reserves ``upload_file`` and
-    ``cos_file``. Only ``local_file`` is executable in the first iteration.
-    Here ``local_file`` means a path local to the video-analysis server, not
-    the Agent Harness server. The downstream ``/predict`` endpoint receives
-    that path through its ``filepath`` query parameter; its default processing
-    parameters remain authoritative.
+    ``local_file`` is a path visible to the video-analysis server and is sent
+    through the ``filepath`` query parameter. ``upload_file`` is a path visible
+    to the Agent Harness server and is sent as multipart file content.
+    ``cos_file`` remains reserved. The downstream ``/predict`` endpoint's
+    default processing parameters remain authoritative.
     """
 
     scenario = _require_string(arguments, 'scenario')
@@ -192,22 +230,37 @@ def submit_video_analysis(
             f'unsupported video_ref.type {ref_type!r}; expected one of: '
             f'{", ".join(sorted(VIDEO_REF_TYPES))}'
         )
-    if ref_type != 'local_file':
+    if ref_type == 'cos_file':
         raise VideoAnalysisError(
             f'video_ref.type {ref_type!r} is reserved by the contract but is not implemented yet'
         )
 
     raw_path = _require_string(video_ref, 'path')
+    if ref_type == 'upload_file':
+        upload_path = _resolve_uploaded_video(raw_path, workspace_root)
+        video_name = upload_path.stem
+        stat = upload_path.stat()
+        request_video_ref = {
+            'type': ref_type,
+            'path': str(upload_path),
+            'size_bytes': stat.st_size,
+            'modified_time_ns': stat.st_mtime_ns,
+        }
+    else:
+        upload_path = None
+        video_name = Path(raw_path).stem
+        request_video_ref = {
+            'type': ref_type,
+            'path': raw_path,
+        }
+
     idempotency_key = _require_string(arguments, 'idempotency_key')
-    _validate_idempotency_key(idempotency_key, Path(raw_path).stem, scenario)
+    _validate_idempotency_key(idempotency_key, video_name, scenario)
 
     endpoint = _predict_endpoint(base_url or os.environ.get(VIDEO_ANALYSIS_BASE_URL_ENV, ''))
     request_fingerprint = {
         'scenario': scenario,
-        'video_ref': {
-            'type': ref_type,
-            'path': raw_path,
-        },
+        'video_ref': request_video_ref,
     }
 
     with _locked_registry(workspace_root) as registry:
@@ -222,7 +275,10 @@ def submit_video_analysis(
             response_payload['idempotency_replayed'] = True
             return _render_result(response_payload)
 
-        task_id = _post_local_video(endpoint, raw_path, timeout_seconds)
+        if upload_path is None:
+            task_id = _post_local_video(endpoint, raw_path, timeout_seconds)
+        else:
+            task_id = _post_uploaded_video(endpoint, upload_path, timeout_seconds)
         response_payload = {
             'task_id': task_id,
             'status': 'queued',
