@@ -29,9 +29,35 @@ class _FakeStatusResponse(_FakeResponse):
         return {'status': _FakeClient.backend_status}
 
 
+class _FakeResultResponse(_FakeResponse):
+    status_code = 200
+
+    def json(self) -> object:
+        if _FakeClient.result_json_error:
+            raise ValueError('invalid JSON')
+        return _FakeClient.result_payload
+
+
+class _FakeResultHTTPErrorResponse(_FakeResultResponse):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        request = httpx.Request('GET', 'http://video.test/result/task-123')
+        response = httpx.Response(self.status_code, request=request)
+        raise httpx.HTTPStatusError(
+            f'HTTP {self.status_code}',
+            request=request,
+            response=response,
+        )
+
+
 class _FakeClient:
     calls: list[tuple[str, dict[str, object]]] = []
     backend_status = 'running'
+    result_payload: object = []
+    result_json_error = False
+    result_status_code = 200
 
     def __init__(self, *, timeout: float) -> None:
         self.timeout = timeout
@@ -46,8 +72,12 @@ class _FakeClient:
         self.calls.append((url, kwargs))
         return _FakeResponse()
 
-    def get(self, url: str) -> _FakeStatusResponse:
+    def get(self, url: str) -> _FakeStatusResponse | _FakeResultResponse:
         self.calls.append((url, {}))
+        if '/result/' in url:
+            if self.result_status_code != 200:
+                return _FakeResultHTTPErrorResponse(self.result_status_code)
+            return _FakeResultResponse()
         return _FakeStatusResponse()
 
 
@@ -55,6 +85,9 @@ class VideoAnalysisToolTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeClient.calls = []
         _FakeClient.backend_status = 'running'
+        _FakeClient.result_payload = []
+        _FakeClient.result_json_error = False
+        _FakeClient.result_status_code = 200
 
     def _execute(
         self,
@@ -84,6 +117,117 @@ class VideoAnalysisToolTests(unittest.TestCase):
 
         self.assertEqual(tool.parameters['required'], ['task_id'])
         self.assertEqual(set(tool.parameters['properties']), {'task_id'})
+
+    def test_result_schema_requires_only_task_id(self) -> None:
+        tool = default_tool_registry()['get_video_analysis_result']
+
+        self.assertEqual(tool.parameters['required'], ['task_id'])
+        self.assertEqual(set(tool.parameters['properties']), {'task_id'})
+
+    def test_returns_video_analysis_result_as_json_object(self) -> None:
+        backend_results = [
+            {
+                'category_id': 1,
+                'category_name': 'fire_extinguisher',
+                'start_timestamp_s': 12.5,
+                'end_timestamp_s': 18.2,
+                'is_detected': True,
+                'transcription_text': None,
+                'hit_keywords': None,
+            },
+            {
+                'category_id': 2,
+                'category_name': 'safety_exit',
+                'start_timestamp_s': None,
+                'end_timestamp_s': None,
+                'is_detected': False,
+                'transcription_text': '出口',
+                'hit_keywords': ['出口'],
+            },
+        ]
+        _FakeClient.result_payload = backend_results
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with (
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(
+                    Path(tmp_dir),
+                    {'task_id': 'task-123'},
+                    'get_video_analysis_result',
+                )
+
+        payload = json.loads(result.content)
+        self.assertTrue(result.ok)
+        self.assertIsInstance(payload, dict)
+        self.assertEqual(payload['task_id'], 'task-123')
+        self.assertEqual(payload['status'], 'done')
+        self.assertEqual(payload['result_count'], 2)
+        self.assertEqual(payload['results'], backend_results)
+        self.assertEqual(
+            _FakeClient.calls,
+            [('http://video.test:8000/result/task-123', {})],
+        )
+
+    def test_reports_result_http_errors(self) -> None:
+        for status_code in (202, 404, 500):
+            with self.subTest(status_code=status_code):
+                _FakeClient.calls = []
+                _FakeClient.result_status_code = status_code
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {'INFERENCE_API_BASE_URL': 'video.test:8000'},
+                        ),
+                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                    ):
+                        result = self._execute(
+                            Path(tmp_dir),
+                            {'task_id': 'task-123'},
+                            'get_video_analysis_result',
+                        )
+
+                self.assertFalse(result.ok)
+                self.assertIn(f'HTTP {status_code}', result.content)
+
+    def test_rejects_invalid_result_json(self) -> None:
+        _FakeClient.result_json_error = True
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with (
+                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(
+                    Path(tmp_dir),
+                    {'task_id': 'task-123'},
+                    'get_video_analysis_result',
+                )
+
+        self.assertFalse(result.ok)
+        self.assertIn('returned invalid JSON', result.content)
+
+    def test_rejects_invalid_result_structure(self) -> None:
+        invalid_payloads = ({'result': []}, ['not-an-object'])
+        for invalid_payload in invalid_payloads:
+            with self.subTest(invalid_payload=invalid_payload):
+                _FakeClient.result_payload = invalid_payload
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {'INFERENCE_API_BASE_URL': 'video.test:8000'},
+                        ),
+                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                    ):
+                        result = self._execute(
+                            Path(tmp_dir),
+                            {'task_id': 'task-123'},
+                            'get_video_analysis_result',
+                        )
+
+                self.assertFalse(result.ok)
+                self.assertIn('must be', result.content)
 
     def test_returns_backend_analysis_statuses_unchanged(self) -> None:
         expected_statuses = {

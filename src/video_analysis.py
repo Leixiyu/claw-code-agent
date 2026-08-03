@@ -25,7 +25,7 @@ _PROCESS_LOCK = threading.Lock()
 
 
 class VideoAnalysisError(RuntimeError):
-    """Raised when a video-analysis Function cannot validate or submit a request."""
+    """Raised when a video-analysis Function cannot complete a request."""
 
 
 def _require_string(container: dict[str, Any], key: str) -> str:
@@ -77,6 +77,17 @@ def _status_endpoint(base_url: str, task_id: str) -> str:
     return f'{normalized}/status/{task_id}'
 
 
+def _result_endpoint(base_url: str, task_id: str) -> str:
+    normalized = base_url.strip().rstrip('/')
+    if not normalized:
+        raise VideoAnalysisError(
+            f'{INFERENCE_API_BASE_URL_ENV} is required to query video analysis result'
+        )
+    if '://' not in normalized:
+        normalized = f'http://{normalized}'
+    return f'{normalized}/result/{task_id}'
+
+
 def _resolve_uploaded_video(raw_path: str, workspace_root: Path) -> Path:
     candidate = Path(raw_path).expanduser()
     if not candidate.is_absolute():
@@ -114,6 +125,20 @@ def _status_from_response(response: httpx.Response) -> str:
     if not isinstance(status, str) or not status:
         raise VideoAnalysisError('video analysis status API response is missing status')
     return status
+
+
+def _results_from_response(response: httpx.Response) -> list[dict[str, Any]]:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise VideoAnalysisError('video analysis result API returned invalid JSON') from exc
+    if not isinstance(payload, list):
+        raise VideoAnalysisError('video analysis result API response must be a JSON array')
+    if any(not isinstance(item, dict) for item in payload):
+        raise VideoAnalysisError(
+            'video analysis result API response items must be JSON objects'
+        )
+    return payload
 
 
 def _post_local_video(endpoint: str, local_path: str, timeout_seconds: float) -> str:
@@ -179,6 +204,25 @@ def _get_backend_status(endpoint: str, timeout_seconds: float) -> str:
     return _status_from_response(response)
 
 
+def _get_backend_result(
+    endpoint: str,
+    timeout_seconds: float,
+) -> list[dict[str, Any]]:
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(endpoint)
+            if response.status_code == 202:
+                raise VideoAnalysisError('video analysis result is not ready (HTTP 202)')
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise VideoAnalysisError(f'video analysis result API returned HTTP {status_code}') from exc
+    except httpx.HTTPError as exc:
+        raise VideoAnalysisError(f'failed to call video analysis result API: {exc}') from exc
+
+    return _results_from_response(response)
+
+
 def _read_registry(workspace_root: Path) -> dict[str, Any]:
     """Read the persisted idempotency registry, or return an empty registry."""
     registry_path = workspace_root.resolve() / _IDEMPOTENCY_DIRECTORY / _IDEMPOTENCY_FILE
@@ -236,6 +280,18 @@ def _render_status_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]
             'status': payload['status'],
             'is_terminal': payload['is_terminal'],
             'result_ready': payload['result_ready'],
+        },
+    )
+
+
+def _render_analysis_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        {
+            'action': 'get_video_analysis_result',
+            'task_id': payload['task_id'],
+            'status': payload['status'],
+            'result_count': payload['result_count'],
         },
     )
 
@@ -391,3 +447,25 @@ def get_video_analysis_status(
         'result_ready': status == 'done',
     }
     return _render_status_result(payload)
+
+
+def get_video_analysis_result(
+    arguments: dict[str, Any],
+    *,
+    timeout_seconds: float,
+    base_url: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Return the completed video-analysis result as a JSON object."""
+    task_id = _require_string(arguments, 'task_id')
+    endpoint = _result_endpoint(
+        base_url or os.environ.get(INFERENCE_API_BASE_URL_ENV, ''),
+        task_id,
+    )
+    results = _get_backend_result(endpoint, timeout_seconds)
+    payload = {
+        'task_id': task_id,
+        'status': 'done',
+        'result_count': len(results),
+        'results': results,
+    }
+    return _render_analysis_result(payload)

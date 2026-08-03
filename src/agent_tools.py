@@ -287,6 +287,27 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_get_video_analysis_status,
         ),
         AgentTool(
+            name='get_video_analysis_result',
+            description=(
+                'Get the JSON result of a completed video-analysis task. '
+                'The task_id must come from submit_video_analysis. '
+                'Call get_video_analysis_status first and only request the result '
+                'after the task status is done.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'Task ID returned by submit_video_analysis.',
+                    },
+                },
+                'required': ['task_id'],
+                'additionalProperties': False,
+            },
+            handler=_get_video_analysis_result,
+        ),
+        AgentTool(
             name='list_dir',
             description='List files and directories under a workspace path.',
             parameters={
@@ -1346,6 +1367,21 @@ def _get_video_analysis_status(
 
     try:
         return get_video_analysis_status(
+            arguments,
+            timeout_seconds=context.command_timeout_seconds,
+        )
+    except VideoAnalysisError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _get_video_analysis_result(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .video_analysis import VideoAnalysisError, get_video_analysis_result
+
+    try:
+        return get_video_analysis_result(
             arguments,
             timeout_seconds=context.command_timeout_seconds,
         )
