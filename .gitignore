@@ -17,6 +17,8 @@ archive/
 .claude/
 .claude.json
 .port_sessions/
+.video_analysis_tools/
+video_analysis_agent_tools/
 
 # Environment files
 .env
