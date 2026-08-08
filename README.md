@@ -290,9 +290,10 @@ claw-code-agent/
 │       ├── __main__.py           # `python -m src.gui` entry point
 │       ├── server.py             # FastAPI app and JSON endpoints
 │       └── static/               # index.html, app.css, app.js
-└── tests/                        # Unit tests
+└── tests/                        # Unit and opt-in integration tests
     ├── test_agent_runtime.py
-    ├── test_video_analysis.py
+    ├── test_video_analysis.py        # Opt-in real HTTP video API workflow
+    ├── test_video_analysis_unit.py   # Mocked video Function schemas and edge cases
     ├── test_agent_context.py
     ├── test_agent_context_usage.py
     ├── test_agent_prompting.py

@@ -100,6 +100,45 @@ python3 -m unittest tests.test_extended_tools -v
 python3 -m unittest tests.test_porting_workspace -v
 ```
 
+### 1.7 Video-analysis Function tests
+
+Run the deterministic unit tests. These use a mocked HTTPX client and never
+create a real video-processing task:
+
+```bash
+python3 -m unittest tests.test_video_analysis_unit -v
+```
+
+The integration suite in `tests/test_video_analysis.py` uses the real HTTPX
+client and runs the complete submit, status-polling, and result workflow. It
+therefore uploads or references a real video and creates a real backend task.
+
+Configure the target and test input in the repository `.env`:
+
+```dotenv
+INFERENCE_API_BASE_URL="http://127.0.0.1:18000"
+VIDEO_ANALYSIS_TEST_VIDEO_TYPE="upload_file"
+VIDEO_ANALYSIS_TEST_VIDEO_PATH="/absolute/path/to/test.mp4"
+VIDEO_ANALYSIS_TEST_SCENARIO="fire_inspection"
+VIDEO_ANALYSIS_TEST_REQUEST_TIMEOUT_SECONDS="300"
+VIDEO_ANALYSIS_TEST_POLL_INTERVAL_SECONDS="5"
+VIDEO_ANALYSIS_TEST_POLL_TIMEOUT_SECONDS="1800"
+```
+
+`VIDEO_ANALYSIS_TEST_VIDEO_TYPE` can be `upload_file`, `local_file`, or
+`cos_file`, with the same path semantics as the registered Agent Tool. Keep
+the SSH tunnel running when the API is reached through a jump host.
+
+Explicitly opt in when you intend to create a real task:
+
+```bash
+RUN_VIDEO_ANALYSIS_INTEGRATION=1 \
+python3 -m unittest tests.test_video_analysis -v
+```
+
+Without the opt-in variable, the integration suite is skipped, including
+during the full unit-test discovery command.
+
 ## 2. Installation And CLI Help
 
 ### 2.1 Editable install
