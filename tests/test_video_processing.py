@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from inspect import signature
+from pathlib import Path
+
+from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent_types import AgentRuntimeConfig
+from src.video_processing import (
+    get_video_processing_result,
+    get_video_processing_status,
+    submit_video_processing,
+)
+
+
+_VIDEO_PROCESSING_TOOLS = {
+    'submit_video_processing',
+    'get_video_processing_status',
+    'get_video_processing_result',
+}
+
+
+class VideoProcessingTests(unittest.TestCase):
+    def test_defines_video_processing_function_signatures(self) -> None:
+        functions = {
+            submit_video_processing: {
+                'arguments',
+                'workspace_root',
+                'timeout_seconds',
+                'mcp_runtime',
+            },
+            get_video_processing_status: {
+                'arguments',
+                'timeout_seconds',
+                'mcp_runtime',
+            },
+            get_video_processing_result: {
+                'arguments',
+                'timeout_seconds',
+                'mcp_runtime',
+            },
+        }
+
+        for function, expected_parameters in functions.items():
+            with self.subTest(function=function.__name__):
+                self.assertEqual(set(signature(function).parameters), expected_parameters)
+
+    def test_registers_all_video_processing_tools(self) -> None:
+        registry = default_tool_registry()
+
+        self.assertTrue(_VIDEO_PROCESSING_TOOLS.issubset(registry))
+
+    def test_submit_schema_uses_raw_video_references(self) -> None:
+        parameters = default_tool_registry()['submit_video_processing'].parameters
+
+        self.assertEqual(
+            parameters['required'],
+            ['scenario', 'raw_video_refs', 'idempotency_key'],
+        )
+        raw_video_refs = parameters['properties']['raw_video_refs']
+        self.assertEqual(raw_video_refs['type'], 'array')
+        self.assertEqual(raw_video_refs['items'], {'type': 'string'})
+        self.assertEqual(raw_video_refs['minItems'], 1)
+
+    def test_status_and_result_schemas_require_only_task_id(self) -> None:
+        registry = default_tool_registry()
+
+        for name in {'get_video_processing_status', 'get_video_processing_result'}:
+            with self.subTest(tool=name):
+                parameters = registry[name].parameters
+                self.assertEqual(parameters['required'], ['task_id'])
+                self.assertEqual(set(parameters['properties']), {'task_id'})
+
+    def test_unimplemented_handlers_return_controlled_errors(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                tool_registry=registry,
+            )
+            for name in _VIDEO_PROCESSING_TOOLS:
+                with self.subTest(tool=name):
+                    result = execute_tool(registry, name, {}, context)
+                    self.assertFalse(result.ok)
+                    self.assertEqual(
+                        result.content,
+                        f'{name} is registered but not implemented',
+                    )
+                    self.assertEqual(
+                        result.metadata,
+                        {'error_kind': 'tool_execution_error'},
+                    )
+
+
+if __name__ == '__main__':
+    unittest.main()

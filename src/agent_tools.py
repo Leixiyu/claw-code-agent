@@ -308,6 +308,160 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_get_video_analysis_result,
         ),
         AgentTool(
+            name='submit_video_processing',
+            description=(
+                'Submit raw videos for asynchronous labeling and dataset preparation. '
+                'raw_video_refs must be trusted logical references created by the Harness. '
+                'This contract is registered for integration work, but its backend '
+                'implementation is not connected yet.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'scenario': {
+                        'type': 'string',
+                        'enum': ['fire_inspection'],
+                        'description': 'Registered video-processing business scenario.',
+                    },
+                    'raw_video_refs': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'minItems': 1,
+                        'description': (
+                            'Harness-created opaque references for the uploaded raw videos. '
+                            'Do not substitute backend paths or model-generated references.'
+                        ),
+                    },
+                    'idempotency_key': {
+                        'type': 'string',
+                        'description': (
+                            'Application-created idempotency key; it must not be invented '
+                            'by the LLM.'
+                        ),
+                    },
+                },
+                'required': ['scenario', 'raw_video_refs', 'idempotency_key'],
+                'additionalProperties': False,
+            },
+            handler=_submit_video_processing,
+        ),
+        AgentTool(
+            name='get_video_processing_status',
+            description=(
+                'Query the status of a video-processing task. This contract is registered '
+                'for integration work, but its backend implementation is not connected yet.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'Task ID returned by submit_video_processing.',
+                    },
+                },
+                'required': ['task_id'],
+                'additionalProperties': False,
+            },
+            handler=_get_video_processing_status,
+        ),
+        AgentTool(
+            name='get_video_processing_result',
+            description=(
+                'Get the public dataset manifest produced by a completed video-processing '
+                'task. The manifest exposes logical references, not backend storage paths. '
+                'This contract is registered for integration work, but its backend '
+                'implementation is not connected yet.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'Task ID returned by submit_video_processing.',
+                    },
+                },
+                'required': ['task_id'],
+                'additionalProperties': False,
+            },
+            handler=_get_video_processing_result,
+        ),
+        AgentTool(
+            name='submit_model_training',
+            description=(
+                'Submit asynchronous model training using a processed dataset. dataset_ref '
+                'must come from a completed video-processing result. This contract is '
+                'registered for integration work, but its backend implementation is not '
+                'connected yet.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'scenario': {
+                        'type': 'string',
+                        'enum': ['fire_inspection'],
+                        'description': 'Registered model-training business scenario.',
+                    },
+                    'dataset_ref': {
+                        'type': 'string',
+                        'description': (
+                            'Opaque dataset reference from get_video_processing_result. '
+                            'It is not a backend filesystem path.'
+                        ),
+                    },
+                    'idempotency_key': {
+                        'type': 'string',
+                        'description': (
+                            'Application-created idempotency key; it must not be invented '
+                            'by the LLM.'
+                        ),
+                    },
+                },
+                'required': ['scenario', 'dataset_ref', 'idempotency_key'],
+                'additionalProperties': False,
+            },
+            handler=_submit_model_training,
+        ),
+        AgentTool(
+            name='get_model_training_status',
+            description=(
+                'Query the status of a model-training task. This contract is registered '
+                'for integration work, but its backend implementation is not connected yet.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'Task ID returned by submit_model_training.',
+                    },
+                },
+                'required': ['task_id'],
+                'additionalProperties': False,
+            },
+            handler=_get_model_training_status,
+        ),
+        AgentTool(
+            name='get_model_training_result',
+            description=(
+                'Get the logical model name and public metadata produced by a completed '
+                'model-training task. Backend model paths are never exposed. This contract '
+                'is registered for integration work, but its backend implementation is not '
+                'connected yet.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'task_id': {
+                        'type': 'string',
+                        'description': 'Task ID returned by submit_model_training.',
+                    },
+                },
+                'required': ['task_id'],
+                'additionalProperties': False,
+            },
+            handler=_get_model_training_result,
+        ),
+        AgentTool(
             name='list_dir',
             description='List files and directories under a workspace path.',
             parameters={
@@ -1386,6 +1540,103 @@ def _get_video_analysis_result(
             timeout_seconds=context.command_timeout_seconds,
         )
     except VideoAnalysisError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _submit_video_processing(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .video_processing import VideoProcessingError, submit_video_processing
+
+    try:
+        return submit_video_processing(
+            arguments,
+            workspace_root=context.root,
+            timeout_seconds=context.command_timeout_seconds,
+            mcp_runtime=context.mcp_runtime,
+        )
+    except VideoProcessingError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _get_video_processing_status(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .video_processing import VideoProcessingError, get_video_processing_status
+
+    try:
+        return get_video_processing_status(
+            arguments,
+            timeout_seconds=context.command_timeout_seconds,
+            mcp_runtime=context.mcp_runtime,
+        )
+    except VideoProcessingError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _get_video_processing_result(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .video_processing import VideoProcessingError, get_video_processing_result
+
+    try:
+        return get_video_processing_result(
+            arguments,
+            timeout_seconds=context.command_timeout_seconds,
+            mcp_runtime=context.mcp_runtime,
+        )
+    except VideoProcessingError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _submit_model_training(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .model_training import ModelTrainingError, submit_model_training
+
+    try:
+        return submit_model_training(
+            arguments,
+            timeout_seconds=context.command_timeout_seconds,
+            mcp_runtime=context.mcp_runtime,
+        )
+    except ModelTrainingError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _get_model_training_status(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .model_training import ModelTrainingError, get_model_training_status
+
+    try:
+        return get_model_training_status(
+            arguments,
+            timeout_seconds=context.command_timeout_seconds,
+            mcp_runtime=context.mcp_runtime,
+        )
+    except ModelTrainingError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+
+
+def _get_model_training_result(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> tuple[str, dict[str, Any]]:
+    from .model_training import ModelTrainingError, get_model_training_result
+
+    try:
+        return get_model_training_result(
+            arguments,
+            timeout_seconds=context.command_timeout_seconds,
+            mcp_runtime=context.mcp_runtime,
+        )
+    except ModelTrainingError as exc:
         raise ToolExecutionError(str(exc)) from exc
 
 
