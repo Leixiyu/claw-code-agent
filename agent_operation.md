@@ -1,6 +1,6 @@
 # Video Processing Agent Operations
 
-> Status: first draft. This document is a runtime instruction template for the
+> This document is a runtime instruction template for the
 > video-processing business Agent. After the real business APIs, scenarios,
 > authorization model, and workflow engine are implemented, review this file
 > and deploy the approved version as `CLAUDE.md` in the Agent data workspace.
