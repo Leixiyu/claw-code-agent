@@ -1,221 +1,340 @@
 # 视频处理 Agent：当前进度与待开发适配需求
 
-> 本文档是项目接入视频业务的阶段性记录，初始快照日期为 **2026-07-25**，
-> 最近更新日期为 **2026-08-03**。
-> 当前目标是先基于已部署的视频分析 Pipeline 开发和验证受控业务 Functions，
-> 再逐步接入任务状态、结果查询、训练和部署流程。
+> 本文档是 Harness 接入视频业务的阶段性记录，初始快照日期为
+> **2026-07-25**，最近更新日期为 **2026-08-23**。
+>
+> 当前代码状态：Video Analysis 的 3 个 Functions 已实现 HTTP POC；
+> Video Processing 和 Model Training 的 6 个 Functions 已注册 Tool
+> Schema、函数签名和安全占位处理，但尚未连接 Business MCP Backend。
 
-## 目标业务
+## 1. 目标业务
 
-Agent 最终需要根据用户 Prompt 和视频信息识别业务场景，并完成以下流程：
+Video Agent System 最终负责协调三个业务模块：
 
-1. 将用户上传的视频提交到对应场景的视频分析接口。
-2. 查询分析任务进度并返回分析结果。
-3. 将视频或数据集提交到对应场景的模型训练接口。
-4. 查询训练进度、验证训练结果。
-5. 在满足指标和审批条件后部署模型。
-6. 使用已部署模型处理后续同类视频。
+1. **Video Processing**：将用户上传的一批 raw videos 交给 Business
+   Backend 进行标注和数据集构建。
+2. **Model Training**：使用 Processing 产生的 dataset reference 训练新模型。
+3. **Video Analysis**：使用已有模型或训练完成的模型分析新视频，并向用户
+   返回分析结果。
 
-视频二进制数据不应放入 LLM 上下文。推荐先写入对象存储或共享文件系统，仅向 Agent 提供
-`video_id`、对象地址、元数据、用户描述和任务状态摘要。
+LLM 只负责理解用户意图、识别 `scenario` 和选择受控 Function。视频
+标注、文件保存、数据集构建、模型训练和推理均由 Business Backend 完成。
+视频二进制内容不应加载到 LLM context。
 
-## 推荐架构边界
+## 2. 最新系统边界
+
+Harness Service 和 Business Service 必须完全隔离，不共享源代码、文件系统或
+数据库。最终业务控制入口只能是已注册的 MCP Tools。
 
 ```text
-用户 Prompt / 视频元数据
-          |
-          v
-Qwen：识别 scenario、operation 和缺失参数
-          |
-          v
-Agent Harness：选择经过注册和授权的业务工具
-          |
-          v
-视频分析 API / 模型训练 API / 模型部署 API
-          |
-          v
-持久化任务状态 + 异步 Worker + Webhook/轮询
-          |
-          v
-Agent 恢复任务并向用户汇报进度和结果
+User / 上层应用
+        |
+        v
+Harness Service
+  - LLM Agent
+  - Tool Registry
+  - MCP Client
+  - raw video workspace
+        |
+        | MCP Tool Contract
+        v
+Business MCP Server
+  - Video Processing
+  - Model Training
+  - Video Analysis
+        |
+        v
+Business-owned datasets / models / results
 ```
 
-Qwen 和 Harness 负责意图理解与受控工具选择，不负责直接生成任意 URL、认证 Header、
-Shell 命令或模型部署命令。场景到接口、模型和工作流的映射应由后端配置决定。
+当前 Video Analysis 仍通过 `INFERENCE_API_BASE_URL` 直接调用 HTTP API，这是
+过渡期 POC，还不符合最终 MCP-only 边界。
 
-## 已完成
+## 3. 不同角色的信息视图
 
-- [x] 保留上游 Git 历史，并建立独立项目仓库。
-- [x] 支持 OpenAI-compatible Chat Completions 和标准 `tools/tool_calls` Agent loop。
-- [x] 可接入阿里云百炼 Qwen API；当前本地配置默认使用 `qwen3-coder-next`。
-- [x] CLI 和 GUI 启动时自动读取当前启动目录的 `.env`。
-- [x] 外部进程环境变量优先于 `.env`。
-- [x] `DASHSCOPE_API_KEY` 可自动映射为 Harness 使用的 `OPENAI_API_KEY`。
-- [x] `AGENT_WORKSPACE` 可作为 CLI 和 GUI 的默认工作目录。
-- [x] 新保存的 Agent session 不再持久化模型 API Key。
-- [x] 后台 Agent 通过进程环境继承 API Key，不再将 Key 写入命令行和后台任务记录。
-- [x] `.env` 已被 Git 忽略，并在本地设置为仅当前用户可读写。
-- [x] 已有文件读取、搜索、写入、Shell、后台任务、日志、Session、预算和结构化输出等基础能力。
-- [x] 已注册 `submit_video_analysis` 业务 Function，可将视频处理服务器上的
-  本地视频路径作为 `filepath` 提交至已部署的 `/predict` 异步分析接口。
-- [x] 已实现 `submit_video_analysis` 工具的 `local_file`、`upload_file`
-  和 `cos_file` POC，并使用本地持久化映射实现幂等重放。
-- [x] 已实现 `get_video_analysis_status` 工具，直接返回推理后端的
-  `pending` / `running` / `done` / `failed` 任务状态。
-- [x] 已实现 `get_video_analysis_result` 工具，将推理后端返回的结果数组
-  包装为包含任务信息和结果数量的 JSON object。
-- [x] `.env` 加载、Agent runtime、Session、后台任务和模型兼容层等 147 个核心测试通过。
+### User
 
-## 当前限制
+用户只需要知道：
 
-- `workflow_run` 当前只记录一次运行，不会真正依次执行工作流步骤。
-- `web_fetch` 只适合读取普通 HTTP GET 文本，不能完成带认证的业务 POST、文件上传和幂等调用。
-- 后台任务状态主要表示 Agent 进程是否运行，不代表视频分析或训练任务的真实进度。
-- 当前文件工具主要面向文本；不应使用 `read_file` 将视频内容传给 LLM。
-- 通用 Shell 不是操作系统级沙箱，生产环境不应依赖 Shell 调用业务接口。
-- `.port_sessions` 适合本地调试，不适合作为生产任务数据库。
-- `submit_video_analysis` 已实现由视频处理服务器解析路径的 `local_file`，
-  以及从 Agent Harness 服务器 multipart 上传的 `upload_file`；
-  `cos_file` 会将 COS 路径原样传给视频处理服务器的 `cos_filepath`。
-- POC 幂等映射仍保存在 `.port_sessions`，还没有实现生产级跨实例任务库。
-- `INFERENCE_API_BASE_URL` 已连接视频提交 Function；其他 `BUSINESS_API_*`、
-  `TASK_API_*` 和 `VIDEO_*` 配置仍为预留。
-- 当前本地环境尚未完成 GUI 集成测试所需依赖的部署验证。
+- 视频是否开始标注、是否标注完成或失败；
+- 模型训练是否开始、是否完成或失败；
+- 视频分析是否开始、是否完成或失败；
+- 最终视频分析结果。
 
-## 环境变量约定
+用户不应看到 dataset reference、dataset manifest、model name、model artifact、
+Backend 物理路径或内部日志。
 
-| 变量 | 当前状态 | 用途 |
+### Agent
+
+Agent 可以知道：
+
+- 用户的问题和意图；
+- 当前注册的 9 个 Function Schema 及其安全返回值；
+- Harness Workspace 中用户上传的 raw videos 或其受控引用；
+- Processing 返回的 public dataset manifest 和 `dataset_ref`；
+- Training 返回的逻辑 `model_name`。
+
+Agent 不知道 Function 的内部处理流程、处理后视频和 label 的物理位置、
+model checkpoint 位置、Business 内部 API 或存储路径。
+
+### Business Backend
+
+Business Backend 负责：
+
+- 在对应 `scenario` 下保存 processed datasets、labels 和内部 manifest；
+- 在对应 `scenario` 下保存 model artifacts、metrics 和内部 metadata；
+- 保存分析任务状态和结果；
+- 将内部记录转换成不包含物理路径的 Agent-safe MCP 返回值。
+
+## 4. 数据所有权和文件边界
+
+| 数据 | 所有者 | Agent 可见性 |
 |---|---|---|
-| `DASHSCOPE_API_KEY` | 已接入 | 阿里云百炼 API Key |
-| `OPENAI_API_KEY` | 已接入 | OpenAI-compatible 客户端实际读取的 Key |
-| `OPENAI_BASE_URL` | 已接入 | 模型服务地址 |
-| `OPENAI_MODEL` | 已接入 | 模型 ID |
-| `AGENT_WORKSPACE` | 已接入 | Agent 默认工作目录 |
-| `INFERENCE_API_BASE_URL` | 已接入 | 视频推理接口根地址；Functions 调用 `<base_url>/predict`、`<base_url>/status/{task_id}` 和 `<base_url>/result/{task_id}` |
-| `BUSINESS_API_TOKEN` | 预留 | 视频业务接口凭据 |
-| `TASK_API_BASE_URL` | 预留 | 任务状态服务地址 |
-| `TASK_API_TOKEN` | 预留 | 任务状态服务凭据 |
-| `VIDEO_INPUT_DIR` | 预留 | 视频输入或暂存目录 |
-| `VIDEO_OUTPUT_DIR` | 预留 | 视频结果目录 |
-| `VIDEO_TEMP_DIR` | 预留 | 视频处理中间文件目录 |
-| `TASK_LOG_DIR` | 预留 | 业务任务日志目录 |
+| 用户上传的 raw videos | Harness | 可通过受控 Workspace 或 opaque reference 使用 |
+| processed videos 和 labels | Video Processing Backend | 不可见 |
+| public dataset manifest / `dataset_ref` | Business 返回给 Harness | Agent 可见，用户不可见 |
+| internal dataset manifest | Video Processing Backend | 不可见 |
+| model artifacts / checkpoints | Model Training Backend | 不可见 |
+| 逻辑 `model_name` | Business 返回给 Harness | Agent 可见，用户不可见 |
+| Video Analysis result | Video Analysis Backend | Agent 可见并可向用户汇报 |
 
-## 待开发：运行时 Agent `CLAUDE.md` 适配
+Harness Workspace 不应保存 processed dataset 实体、label 文件、checkpoint 或
+model weights。Harness 与 Business 不共享物理路径；Agent Tool Arguments 只传递
+`raw_video_ref`、`dataset_ref`、`model_name` 和 `task_id` 等逻辑引用。raw video
+二进制内容如需跨边界传输，必须交给 MCP 层的受控 Data Transfer Contract，
+不进入 LLM arguments。
 
-当前 [agent_operation.md](agent_operation.md) 是视频业务 Agent 运行规则的
-first draft。它暂时保存在 Harness 仓库中用于版本管理，尚未作为正式运行时
-`CLAUDE.md` 部署到 Agent Data Folder。
+## 5. 当前九个业务 Functions
 
-真实业务代码、接口和场景定义进入项目后，需要完成：
+| 模块 | Function | Tool Schema | Python 骨架 | Backend 实现 |
+|---|---|---:|---:|---:|
+| Analysis | `submit_video_analysis` | 已注册 | 已实现 | HTTP POC |
+| Analysis | `get_video_analysis_status` | 已注册 | 已实现 | HTTP POC |
+| Analysis | `get_video_analysis_result` | 已注册 | 已实现 | HTTP POC |
+| Processing | `submit_video_processing` | 已注册 | 已创建 | 未连接 |
+| Processing | `get_video_processing_status` | 已注册 | 已创建 | 未连接 |
+| Processing | `get_video_processing_result` | 已注册 | 已创建 | 未连接 |
+| Training | `submit_model_training` | 已注册 | 已创建 | 未连接 |
+| Training | `get_model_training_status` | 已注册 | 已创建 | 未连接 |
+| Training | `get_model_training_result` | 已注册 | 已创建 | 未连接 |
 
-- [ ] 根据正式的 `scenario` 和 `operation` 枚举更新场景识别与路由规则。
-- [ ] 根据注册后的业务 Function Call Schema 更新工具名称、必填参数、返回字段和错误处理规则。
-- [ ] 根据真实工作流更新分析、训练、验证、部署、回滚及终态判断规则。
-- [ ] 补充用户、项目、租户权限，以及训练、部署和破坏性操作的审批要求。
-- [ ] 将幂等键、任务去重、超时、重试、Webhook、轮询和任务恢复策略与后端实现对齐。
-- [ ] 删除只适用于开发阶段的占位说明，避免把开发路线图重复放入运行时 Prompt。
-- [ ] 使用 Mock API 验证场景路由、缺失参数、低置信度、工具缺失、越权请求和异步状态处理。
-- [ ] 接入真实 API 后验证工具选择、参数生成、任务恢复、结果汇报和 Prompt Injection 防护。
-- [ ] 审核通过后，将 `agent_operation.md` 的正式版本部署为 Agent Data Folder 中只读的 `CLAUDE.md`。
-- [ ] 验证生产业务 Agent 只加载 Data Folder 中的 `CLAUDE.md`，不会加载或修改 Harness 仓库中的开发规则。
-
-## 待开发：Harness 自动部署脚本
-
-计划新增 `auto-deploy.sh`，用于在 Harness 仓库代码更新后，将指定 Git
-版本自动部署到目标服务器。
-
-当前尚未确定最终服务器、代码目录、Agent Data Folder、运行用户、服务名称和触发方式，
-因此本阶段只记录需求，不创建或执行脚本。
-
-脚本至少需要完成：
-
-- [ ] 将服务器上的 Harness 仓库更新到配置的 Git remote、branch 和 commit。
-- [ ] 默认使用可审计的 fast-forward 更新方式，不静默覆盖服务器上的未提交修改。
-- [ ] 检查配置的 Agent Data Folder 是否存在；不存在时创建目录及必要的运行子目录。
-- [ ] 根据服务器运行用户设置 Data Folder 的 owner、group 和最小必要权限。
-- [ ] 将部署版本中的 `agent_operation.md` 复制到 Agent Data Folder，并命名为 `CLAUDE.md`。
-- [ ] 使用临时文件加原子替换更新 `CLAUDE.md`，避免 Agent 读取到只复制了一部分的文件。
-- [ ] 将运行时 `CLAUDE.md` 设置为只读，防止业务 Agent 修改自身运行规则。
-- [ ] 不覆盖 Data Folder 中已有的视频、任务状态、结果、日志、Session 或其他业务数据。
-- [ ] 不创建、复制、打印或覆盖 `.env`、API Key 和业务 Token；部署前只检查所需配置是否存在。
-- [ ] 根据部署方式更新虚拟环境和 Python 依赖，并在需要时执行数据库或配置迁移。
-- [ ] 重启或平滑重载 Harness 服务，并执行 CLI、GUI/API 和 `CLAUDE.md` 加载检查。
-- [ ] 记录部署时间、Git commit、目标目录、服务状态和健康检查结果。
-- [ ] 部署或健康检查失败时停止流程，并支持恢复到上一个已验证版本。
-- [ ] 确保重复执行脚本不会重复破坏目录、数据或服务状态。
-
-后续需要确定的配置包括：
-
-- `REPOSITORY_DIR`
-- `GIT_REMOTE`
-- `GIT_BRANCH`
-- `AGENT_DATA_DIR`
-- `RUNTIME_USER`
-- `RUNTIME_GROUP`
-- `VENV_DIR`
-- `SERVICE_NAME`
-- `HEALTH_CHECK_COMMAND` 或 `HEALTH_CHECK_URL`
-- 自动触发方式，例如 CI/CD、Webhook、定时任务或服务器端部署服务
-
-自动触发机制应调用 `auto-deploy.sh`，但不应把 Git 凭据、服务器密钥或业务密钥直接写入脚本。
-
-## 待开发：P0（最小可行 POC）
-
-- [ ] 定义有限且可校验的 `scenario` 和 `operation` 枚举。
-- [ ] 让 Qwen 输出结构化路由结果：
-  `scenario`、`operation`、`confidence`、`required_inputs`。
-- [ ] 实现 Scenario Registry，统一维护场景、工具、接口和允许使用的模型。
-- [ ] 实现 `submit_model_training` 工具。
-- [ ] 实现 `get_training_status` 和 `get_training_result` 工具。
-- [ ] 使用 Mock API 模拟分析和训练任务，先验证 Agent 的场景路由与工具选择。
-- [ ] 使用 SQLite 或 PostgreSQL 保存业务任务，而不是依赖 Agent session。
-- [ ] 建立基础异步状态机和可恢复任务执行。
-- [ ] 当场景置信度不足或输入参数缺失时，要求用户确认或补充信息。
-
-建议的初始状态机：
+当前六个占位 Function 被调用时会返回受控错误：
 
 ```text
-视频分析：
-uploaded -> classified -> analysis_queued -> analyzing -> succeeded/failed
-
-训练部署：
-training_queued -> training -> validating -> awaiting_approval
-                -> deploying -> active/failed/rolled_back
+<function_name> is registered but not implemented
 ```
 
-## 待开发：P1（真实接口接入）
+因此“Tool Schema 已注册”不等于“业务能力已可用”。
 
-- [ ] 增加视频上传、对象存储和 `video_id` 管理。
-- [ ] 为业务接口实现统一认证、超时、指数退避、限流和错误分类。
-- [ ] 所有创建类接口支持 idempotency key 和请求去重。
-- [ ] 支持业务 Webhook，并验证回调签名。
-- [ ] 对不支持 Webhook 的接口实现低频、可恢复的后台轮询。
-- [ ] 实现任务取消、失败补偿和超时处理。
-- [ ] 将业务 API 地址映射放入注册表，不允许 LLM 提供任意 URL。
-- [ ] 为训练、部署及高成本操作增加明确的审批步骤。
-- [ ] 为 Prompt、文件、任务和业务接口增加用户及项目级授权检查。
+## 6. 当前 Tool Contract
 
-## 待开发：P2（模型部署与生产能力）
+### Video Analysis
 
-- [ ] 建立 Model Registry，记录场景、模型版本、训练数据、评估指标和部署状态。
-- [ ] 建立训练结果验收阈值，未达标模型禁止部署。
-- [ ] 支持灰度部署、健康检查、流量切换和自动回滚。
-- [ ] 保留上一稳定模型版本，并支持人工回滚。
+```text
+submit_video_analysis(scenario, video_ref, idempotency_key)
+get_video_analysis_status(task_id)
+get_video_analysis_result(task_id)
+```
+
+- `scenario` 当前只支持 `fire_inspection`。
+- `video_ref.type` 支持 `local_file` / `upload_file` / `cos_file`。
+- 任务状态为 `pending` / `running` / `done` / `failed`。
+- `submit` 返回 `task_id`、`status="pending"`、`scenario`、`video_ref`、
+  `idempotency_key` 和 `idempotency_replayed`。
+- `status` 返回 `task_id`、`status`、`is_terminal` 和 `result_ready`。
+- `result` 返回 `task_id`、`status="done"`、`result_count` 和 `results`。
+
+### Video Processing Skeleton
+
+```text
+submit_video_processing(scenario, raw_video_refs, idempotency_key)
+get_video_processing_status(task_id)
+get_video_processing_result(task_id)
+```
+
+- `raw_video_refs` 是由 Harness 创建的一个或多个 opaque references。
+- `get_video_processing_result` 未来返回 public dataset manifest 和
+  `dataset_ref`，不返回 Business 物理路径。
+
+### Model Training Skeleton
+
+```text
+submit_model_training(scenario, dataset_ref, idempotency_key)
+get_model_training_status(task_id)
+get_model_training_result(task_id)
+```
+
+- `dataset_ref` 必须来自已完成的 Processing 结果，不是文件系统路径。
+- `get_model_training_result` 未来返回逻辑 `model_name` 和安全的公开元数据，
+  不返回 model artifact 路径。
+
+Processing 和 Training 的真实状态枚举、result schema 和错误合约尚未与
+Business Backend 确认，不应根据文档自行假定。
+
+## 7. 当前代码和测试布局
+
+```text
+src/
+├── agent_tools.py
+├── video_analysis.py
+├── video_processing.py
+└── model_training.py
+
+tests/
+├── test_video_analysis.py
+├── test_video_analysis_unit.py
+├── test_video_processing.py
+└── test_model_training.py
+```
+
+- `test_video_analysis.py` 是需要显式启用的真实 HTTP 集成测试。
+- `test_video_analysis_unit.py` 验证已实现的 Analysis Functions。
+- `test_video_processing.py` 和 `test_model_training.py` 当前只验证函数签名、
+  Tool Schema、注册和受控未实现错误。
+- 上述三个业务单元测试文件目前共 29 个相关测试通过。
+
+## 8. 当前限制
+
+- Video Analysis 仍是直接 HTTP POC，未迁移到 Business MCP Server。
+- Video Analysis 仍可以在 Tool Contract 中接收和返回物理路径，与最终
+  opaque-reference 设计尚未完全对齐。
+- Video Processing 和 Model Training 只有 Skeleton，没有参数校验、MCP
+  调用、幂等持久化、状态处理或 result rendering。
+- `MCPRuntime` 当前支持本地 manifest 和 stdio MCP transport；最终
+  Business MCP 的部署位置、传输方式、认证和超时尚未确定。
+- Harness 和 Business 不共享文件系统，大视频如何跨越 MCP 边界尚需
+  明确 Data Transfer Contract；不应将视频 Base64 放入 LLM Tool Arguments。
+- 当前只有 `fire_inspection` 一个 scenario，尚无正式 Scenario Registry。
+- Agent session 和 `.port_sessions` 不是业务任务的权威数据库。
+- Harness 后台进程状态不代表 Business 任务状态。
+- 当前没有多租户权限、生产级审计、限流、Webhook、任务恢复和
+  保留/删除策略。
+
+## 9. 当前配置约定
+
+| 配置 | 状态 | 用途 |
+|---|---|---|
+| `DASHSCOPE_API_KEY` / `OPENAI_API_KEY` | 已接入 | LLM provider 凭据 |
+| `OPENAI_BASE_URL` / `OPENAI_MODEL` | 已接入 | OpenAI-compatible 模型服务 |
+| `AGENT_WORKSPACE` | 已接入 | Harness 的受控 Agent Workspace |
+| `INFERENCE_API_BASE_URL` | 过渡期已接入 | Video Analysis HTTP POC |
+| `.claw-mcp.json` / `.mcp.json` | Harness 能力已有 | 发现 MCP Server、Resources 和 Tools |
+| Business MCP Server 配置与凭据 | 未确定 | 最终三个业务模块的唯一控制入口 |
+
+`BUSINESS_API_*`、`TASK_API_*`、`VIDEO_OUTPUT_DIR` 和 `TASK_LOG_DIR` 等早期预留
+变量尚未接入当前代码。最终 MCP-only 设计不应默认让 Harness 直接持有
+Business API Token、processed dataset 目录或 model 目录。
+
+## 10. 待开发：P0（九个 Functions POC）
+
+- [ ] 与 Business 同事确认 Video Processing 的 input、status、result 和 error
+  Contract。
+- [ ] 与 Business 同事确认 Model Training 的 input、status、result 和 error
+  Contract。
+- [ ] 定义 raw video 跨越 Harness/Business 边界的 Data Transfer Contract，不向
+  LLM 暴露上传凭据或物理路径。
+- [ ] 实现 `submit_video_processing`、`get_video_processing_status` 和
+  `get_video_processing_result` 的 Business MCP 调用。
+- [ ] 实现 `submit_model_training`、`get_model_training_status` 和
+  `get_model_training_result` 的 Business MCP 调用。
+- [ ] 将 Video Analysis 从直接 HTTP 调用迁移到 Business MCP Tool，同时决定是否
+  保留当前 HTTP adapter 作为过渡或测试层。
+- [ ] 统一三个模块的 submit/status/result envelope，但不擅自重命名 Business
+  Backend 的权威状态。
+- [ ] 为两个新模块实现参数校验、幂等、超时、错误转换和安全
+  result rendering。
+- [ ] 实现 Scenario Registry，统一管理 scenario、允许的操作和 Business
+  MCP Tool 映射。
+- [ ] 使用 SQLite 或 PostgreSQL 保存可恢复的业务任务引用，不依赖 LLM
+  session 作为权威状态。
+- [ ] 为六个新 Functions 增加 Mock MCP 测试；实现后再增加显式启用的真实
+  Business MCP 集成测试。
+- [ ] 当 scenario 或必填参数不明确时让 Agent 请求最小必要补充，不得猜测或
+  生成未注册引用。
+
+## 11. 待开发：运行时 Agent `CLAUDE.md` 适配
+
+当前 [agent_operation.md](agent_operation.md) 是未来完整业务 Agent 的运行规则草稿。
+它暂时保存在 Harness 仓库中用于版本管理，尚未作为生产运行时
+`CLAUDE.md` 部署。
+
+- [ ] 将运行时能力限定为当前 9 个 Functions，将部署、回滚、日志读取等
+  未注册能力放入 future extension。
+- [ ] 明确 Tool 可用的条件为 Schema 已注册、handler 已实现、Business MCP
+  已连接且 policy 允许；不能只以“已注册”判断可用。
+- [ ] 写入 User / Agent / Business Backend 三层信息视图和输出过滤规则。
+- [ ] 规定 dataset manifest、`dataset_ref` 和 `model_name` 只能用于 Agent 内部
+  Tool 编排，不向普通用户展示。
+- [ ] 更新 Workspace 边界：Harness 只保存 raw videos 和安全逻辑引用，
+  processed datasets、labels 和 model artifacts 由 Business Backend 所有。
+- [ ] 加入六个 Skeleton Functions 的精确参数，并明确当前调用只能得到
+  `registered but not implemented` 错误。
+- [ ] 在 Business Contract 确认后补充 Processing/Training 的返回字段、权威
+  状态、幂等、超时、重试和轮询规则。
+- [ ] 使用 Mock MCP 验证场景路由、缺失参数、Tool 不可用、越权请求、
+  异步状态和 Prompt Injection 防护。
+- [ ] 审核通过后，将 `agent_operation.md` 正式部署为 Agent Data Folder 中只读的
+  `CLAUDE.md`。
+
+## 12. 待开发：P1（生产级业务接入）
+
+- [ ] 为 Business MCP 实现服务身份认证、最小权限、超时、限流和错误分类。
+- [ ] 为所有创建类操作实现 application-created idempotency key 和跨实例请求去重。
+- [ ] 明确 Business 任务的 Webhook 或可恢复低频轮询机制，并验证回调身份。
+- [ ] 建立 dataset 和 model 的 scenario 隔离、版本、保留、归档和删除策略。
+- [ ] 建立 Harness 对 raw videos 的用户/项目/租户级授权和文件生命周期。
+- [ ] 将 Business 返回值分为 Agent View 和 User View，确保用户无法获得
+  dataset、model 和 Backend 内部信息。
 - [ ] 增加 Trace ID、结构化日志、指标、告警和完整操作审计。
-- [ ] 增加多租户数据隔离、配额、并发限制和成本控制。
-- [ ] 使用容器、非 root 用户、只读挂载和网络白名单隔离 Agent。
-- [ ] 针对 Prompt injection、恶意日志内容和越权工具调用建立安全测试。
-- [ ] 对候选 Qwen 模型进行场景分类、工具调用成功率、延迟和成本评测。
+- [ ] 增加失败补偿、超时处理、安全重试、任务恢复和并发/配额限制。
 
-## POC 验收标准
+## 13. 待开发：P2（未来扩展）
 
-首个 POC 至少应满足：
+- [ ] 建立 Model Registry，记录 scenario、逻辑模型名、版本、训练数据引用、
+  评估指标和生命周期。
+- [ ] 在业务需求确认后，再设计模型验证、审批、部署、灰度、健康检查和回滚
+  Functions；这些能力不属于当前 9 个 Functions。
+- [ ] 增加多 scenario 路由、数据隔离和模型选择评测。
+- [ ] 针对 Prompt Injection、恶意视频元数据、伪造 manifest、恶意 MCP 结果和
+  越权 Tool Call 建立安全测试。
+- [ ] 对候选 Qwen 模型进行 scenario 分类、Tool Call 成功率、延迟和成本评测。
 
-1. 两个不同视频场景可以通过 Prompt 稳定区分。
-2. Agent 只能从注册过的场景、操作和业务工具中选择。
-3. 分析与训练任务可以提交、持久化、恢复和查询。
-4. 重复请求不会创建重复任务。
-5. 低置信度分类不会自动执行。
-6. 训练完成后必须经过指标验证和审批，不能无条件部署。
-7. API Key、业务 Token、视频内容和敏感日志不会进入 Git 或普通任务日志。
-8. Agent 进程重启后仍可从任务数据库恢复真实业务进度。
+## 14. 待开发：Harness 自动部署脚本
+
+计划新增 `auto-deploy.sh`，用于在 Harness 仓库代码更新后，将指定 Git 版本
+自动部署到目标服务器。当前尚未确定最终服务器、目录、运行用户、服务名称和
+触发方式，因此本阶段只记录需求。
+
+- [ ] 使用可审计的 fast-forward 方式更新指定 Git remote、branch 和 commit，
+  不覆盖服务器未提交修改。
+- [ ] 检查 Agent Data Folder 是否存在，不存在时创建 Harness 需要的 raw
+  video、reference、task、session 和 temp 子目录。
+- [ ] 不在 Harness Data Folder 创建 processed dataset 或 model artifact 目录。
+- [ ] 按最小必要权限设置运行用户和目录 owner/group。
+- [ ] 将部署版本中的 `agent_operation.md` 原子替换到 Agent Data Folder，并命名为
+  只读 `CLAUDE.md`。
+- [ ] 不覆盖 raw videos、references、任务状态、Session 或其他业务数据。
+- [ ] 不创建、复制、打印或覆盖 `.env`、LLM API Key 和 Business MCP 凭据。
+- [ ] 更新虚拟环境和 Python 依赖，并在需要时执行配置迁移。
+- [ ] 重启或平滑重载 Harness，检查 `CLAUDE.md` 加载、MCP 连接、九个 Tool
+  Schema 和基础健康状态。
+- [ ] 记录部署时间、Git commit、目标目录、服务状态和健康检查结果，并在
+  部署失败时恢复到上一个已验证版本。
+- [ ] 确保重复执行脚本不会破坏已有目录、数据或服务状态。
+
+## 15. POC 验收标准
+
+1. Agent 只能从已注册的 scenario、operation 和 9 个 Business Functions 中选择。
+2. 未实现或未连接的 Tool 不会返回伪造的成功结果。
+3. Processing、Training 和 Analysis 均可通过 `submit -> task_id -> status -> result`
+   流程执行和恢复。
+4. 创建类请求可幂等重放，不会意外创建重复任务。
+5. Harness 和 Business 不共享文件系统；Tool Arguments 只传递受控逻辑引用，
+   raw video 数据只能通过经批准的 MCP Data Transfer Contract 跨边界传输。
+6. Agent 可使用 public dataset manifest、`dataset_ref` 和 `model_name` 进行内部
+   编排，但不向普通用户展示这些信息。
+7. 用户只看到 Processing/Training/Analysis 的业务进度、成败和最终 Analysis
+   结果。
+8. API Key、MCP 凭据、视频二进制内容、Backend 路径和敏感日志不进入 Git、
+   LLM context 或普通用户回复。
+9. Harness 或 Agent 重启后仍可从任务存储恢复真实 Business 进度。
