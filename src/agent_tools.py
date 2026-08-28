@@ -369,9 +369,8 @@ def default_tool_registry() -> dict[str, AgentTool]:
             name='get_video_processing_result',
             description=(
                 'Get the public dataset manifest produced by a completed video-processing '
-                'task. The manifest exposes logical references, not backend storage paths. '
-                'This contract is registered for integration work, but its backend '
-                'implementation is not connected yet.'
+                'task. The Harness saves the manifest in the Agent workspace and returns '
+                'its dataset ID and authorized relative path, not a backend storage path.'
             ),
             parameters={
                 'type': 'object',
@@ -1587,6 +1586,7 @@ def _get_video_processing_result(
     try:
         return get_video_processing_result(
             arguments,
+            workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
     except VideoProcessingError as exc:

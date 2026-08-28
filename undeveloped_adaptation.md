@@ -3,8 +3,8 @@
 > 本文档是 Harness 接入视频业务的阶段性记录，初始快照日期为
 > **2026-07-25**，最近更新日期为 **2026-08-28**。
 >
-> 当前代码状态：Video Analysis 的 3 个 Functions 已实现 HTTP POC；
-> Video Processing 的 submit/status 已实现 HTTP POC，result 尚未实现；
+> 当前代码状态：Video Analysis 和 Video Processing 的 3 个 Functions
+> 均已实现 HTTP POC；
 > Model Training 的 3 个 Functions 已注册 Tool Schema 和安全占位处理。
 
 ## 1. 目标业务
@@ -115,12 +115,12 @@ Function 读取并通过 multipart HTTP 上传；视频二进制内容不进入 
 | Analysis | `get_video_analysis_result` | 已注册 | 已实现 | HTTP POC |
 | Processing | `submit_video_processing` | 已注册 | 已实现 | HTTP POC |
 | Processing | `get_video_processing_status` | 已注册 | 已实现 | HTTP POC |
-| Processing | `get_video_processing_result` | 已注册 | 已创建 | 未连接 |
+| Processing | `get_video_processing_result` | 已注册 | 已实现 | HTTP POC |
 | Training | `submit_model_training` | 已注册 | 已创建 | 未连接 |
 | Training | `get_model_training_status` | 已注册 | 已创建 | 未连接 |
 | Training | `get_model_training_result` | 已注册 | 已创建 | 未连接 |
 
-当前四个占位 Function 被调用时会返回受控错误：
+当前三个 Model Training 占位 Function 被调用时会返回受控错误：
 
 ```text
 <function_name> is registered but not implemented
@@ -157,8 +157,11 @@ get_video_processing_result(task_id)
 - `raw_video_refs` 是 Harness 服务器上一个或多个用户上传视频的文件路径；
   相对路径从 Agent Workspace 解析，并由 Harness multipart 上传。
 - `submit` 和 `status` 的状态及返回 envelope 与 Analysis 对齐。
-- `get_video_processing_result` 未来返回 public dataset manifest 和
-  `dataset_ref`，不返回 Business 物理路径。
+- `get_video_processing_result` 返回 `dataset_id` 和 Harness 授权的相对
+  `manifest_path`，不返回 Business 物理路径。
+- Business `/result/{task_id}` 响应是包含 `dataset_id` 的完整 public
+  dataset manifest JSON object；Harness 将其原子写入
+  `AGENT_WORKSPACE/datasets/{dataset_id}.json`。
 
 ### Model Training Skeleton
 
@@ -172,8 +175,9 @@ get_model_training_result(task_id)
 - `get_model_training_result` 未来返回逻辑 `model_name` 和安全的公开元数据，
   不返回 model artifact 路径。
 
-Processing 和 Training 的真实状态枚举、result schema 和错误合约尚未与
-Business Backend 确认，不应根据文档自行假定。
+Processing 的 result schema 仍是待与 Business 确认的 POC Contract；
+Training 的真实状态枚举、result schema 和错误合约尚未与 Business
+Backend 确认，不应根据文档自行假定。
 
 ## 7. 当前代码和测试布局
 
@@ -192,19 +196,20 @@ tests/
 
 - `test_video_analysis.py` 是需要显式启用的真实 HTTP 集成测试。
 - `test_video_analysis_unit.py` 验证已实现的 Analysis Functions。
-- `test_video_processing.py` 验证 Processing submit/status HTTP POC、Tool Schema
-  和尚未实现的 result。
+- `test_video_processing.py` 验证 Processing submit/status/result HTTP POC、
+  manifest 持久化和 Tool Schema。
 - `test_model_training.py` 验证 Training 函数签名、Tool Schema、注册和受控
   未实现错误。
-- 当前三个业务单元测试文件共 37 个相关测试通过。
+- 当前三个业务单元测试文件共 42 个相关测试通过。
 
 ## 8. 当前限制
 
 - Video Analysis 和 Video Processing 仍是直接 HTTP POC，尚未加入生产级
-  服务认证、限流、审计和可恢复任务存储。
+  服务认证、限流、审计和数据库任务存储；当前仅有 Workspace
+  Task JSON POC。
 - Analysis Tool Contract 仍支持 Business 服务器路径和 COS 路径；Processing
   当前只支持 Harness 服务器上的上传文件。
-- Video Processing result 和三个 Model Training Functions 尚未实现。
+- 三个 Model Training Functions 尚未实现。
 - Harness 负责通过 HTTP 上传 raw video；应继续验证大文件超时、流式传输、
   文件大小限制和失败重试，不应将视频 Base64 放入 LLM Tool Arguments。
 - 当前只有 `fire_inspection` 一个 scenario，尚无正式 Scenario Registry。
@@ -236,7 +241,8 @@ tests/
   Contract。
 - [x] 实现 `submit_video_processing` 和 `get_video_processing_status` 的
   Harness HTTP 调用。
-- [ ] 实现 `get_video_processing_result` 的 Harness HTTP 调用。
+- [x] 实现 `get_video_processing_result` 的 Harness HTTP 调用，并将 public
+  dataset manifest 保存到 `AGENT_WORKSPACE/datasets/{dataset_id}.json`。
 - [ ] 实现 `submit_model_training`、`get_model_training_status` 和
   `get_model_training_result` 的 Harness HTTP 调用。
 - [ ] 定义 raw video 从 Harness 上传到 Business API 的大文件传输、
@@ -312,7 +318,8 @@ tests/
   不覆盖服务器未提交修改。
 - [ ] 检查 Agent Data Folder 是否存在，不存在时创建 Harness 需要的 raw
   video、reference、task、session 和 temp 子目录。
-- [ ] 不在 Harness Data Folder 创建 processed dataset 或 model artifact 目录。
+- [ ] 不在 Harness Data Folder 创建 processed dataset 实体或 model artifact
+  目录；仅允许在 `datasets/` 中保存 Agent 可见的 public manifest。
 - [ ] 按最小必要权限设置运行用户和目录 owner/group。
 - [ ] 将部署版本中的 `agent_operation.md` 原子替换到 Agent Data Folder，并命名为
   只读 `CLAUDE.md`。

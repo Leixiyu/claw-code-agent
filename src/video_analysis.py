@@ -28,9 +28,10 @@ _PROCESSING_IDEMPOTENCY_LOCK_FILE = 'video_processing_idempotency.lock'
 _PROCESSING_PROCESS_LOCK = threading.Lock()
 
 _TASKS_DIRECTORY = Path('tasks')
+_DATASETS_DIRECTORY = Path('datasets')
 _TASK_RECORD_SCHEMA_VERSION = 1
-_TASK_RECORD_LOCK_FILE = 'task_records.lock'
-_TASK_RECORD_LOCK = threading.Lock()
+_WORKSPACE_RECORD_LOCK_FILE = 'workspace_records.lock'
+_WORKSPACE_RECORD_LOCK = threading.Lock()
 _TASK_MODULES = frozenset({'analysis', 'processing', 'training'})
 
 
@@ -114,11 +115,18 @@ def _status_endpoint(
     return f'{normalized}/status/{task_id}'
 
 
-def _result_endpoint(base_url: str, task_id: str) -> str:
+def _result_endpoint(
+    base_url: str,
+    task_id: str,
+    *,
+    api_env: str = VIDEO_ANALYSIS_API_ENV,
+    operation: str = 'video analysis',
+    error_type: type[RuntimeError] = VideoAnalysisError,
+) -> str:
     normalized = base_url.strip().rstrip('/')
     if not normalized:
-        raise VideoAnalysisError(
-            f'{VIDEO_ANALYSIS_API_ENV} is required to query video analysis result'
+        raise error_type(
+            f'{api_env} is required to query {operation} result'
         )
     if '://' not in normalized:
         normalized = f'http://{normalized}'
@@ -324,6 +332,46 @@ def _get_backend_result(
     return _results_from_response(response)
 
 
+def _get_processing_backend_manifest(
+    endpoint: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(endpoint)
+            if response.status_code == 202:
+                raise VideoProcessingError(
+                    'video processing result is not ready (HTTP 202)'
+                )
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise VideoProcessingError(
+            f'video processing result API returned HTTP {status_code}'
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise VideoProcessingError(
+            f'failed to call video processing result API: {exc}'
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise VideoProcessingError(
+            'video processing result API returned invalid JSON'
+        ) from exc
+    if not isinstance(payload, dict):
+        raise VideoProcessingError(
+            'video processing result API response must be a JSON object'
+        )
+    dataset_id = payload.get('dataset_id')
+    if not isinstance(dataset_id, str) or not dataset_id:
+        raise VideoProcessingError(
+            'video processing result API response is missing dataset_id'
+        )
+    return payload
+
+
 def _read_registry(
     workspace_root: Path,
     *,
@@ -434,6 +482,19 @@ def _render_analysis_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any
     )
 
 
+def _render_processing_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        {
+            'action': 'get_video_processing_result',
+            'task_id': payload['task_id'],
+            'status': payload['status'],
+            'dataset_id': payload['dataset_id'],
+            'manifest_path': payload['manifest_path'],
+        },
+    )
+
+
 @contextmanager
 def _locked_registry(
     workspace_root: Path,
@@ -506,17 +567,17 @@ def _task_record_path(
 
 
 @contextmanager
-def _locked_task_records(
+def _locked_workspace_records(
     workspace_root: Path,
     *,
     error_type: type[RuntimeError],
 ) -> Iterator[None]:
-    """Serialize task-record updates across threads and Harness processes."""
+    """Serialize workspace-record updates across threads and Harness processes."""
     state_dir = workspace_root.resolve() / _BUSINESS_FUNCTIONS_DIRECTORY
     try:
         state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        lock_path = state_dir / _TASK_RECORD_LOCK_FILE
-        with _TASK_RECORD_LOCK:
+        lock_path = state_dir / _WORKSPACE_RECORD_LOCK_FILE
+        with _WORKSPACE_RECORD_LOCK:
             with lock_path.open('a+', encoding='utf-8') as lock_file:
                 try:
                     os.chmod(lock_path, 0o600)
@@ -607,7 +668,7 @@ def _persist_task_submission(
     error_type: type[RuntimeError],
 ) -> None:
     task_id = str(payload['task_id'])
-    with _locked_task_records(workspace_root, error_type=error_type):
+    with _locked_workspace_records(workspace_root, error_type=error_type):
         task_path = _task_record_path(
             workspace_root,
             module,
@@ -657,7 +718,7 @@ def _persist_task_status(
     error_type: type[RuntimeError],
 ) -> None:
     task_id = str(payload['task_id'])
-    with _locked_task_records(workspace_root, error_type=error_type):
+    with _locked_workspace_records(workspace_root, error_type=error_type):
         task_path = _task_record_path(
             workspace_root,
             module,
@@ -690,7 +751,7 @@ def _persist_task_result(
     error_type: type[RuntimeError],
 ) -> None:
     task_id = str(payload['task_id'])
-    with _locked_task_records(workspace_root, error_type=error_type):
+    with _locked_workspace_records(workspace_root, error_type=error_type):
         task_path = _task_record_path(
             workspace_root,
             module,
@@ -718,6 +779,70 @@ def _persist_task_result(
             }
         )
         _write_task_record(task_path, record, error_type=error_type)
+
+
+def _dataset_manifest_path(workspace_root: Path, dataset_id: str) -> Path:
+    if (
+        len(dataset_id) > 240
+        or dataset_id in {'.', '..'}
+        or dataset_id.startswith('.')
+        or any(
+            not character.isascii()
+            or (not character.isalnum() and character not in {'-', '_', '.'})
+            for character in dataset_id
+        )
+        or '/' in dataset_id
+        or '\\' in dataset_id
+        or Path(dataset_id).name != dataset_id
+    ):
+        raise VideoProcessingError(
+            'dataset_id contains characters that are unsafe for manifest storage'
+        )
+
+    workspace = workspace_root.resolve()
+    dataset_directory = workspace / _DATASETS_DIRECTORY
+    try:
+        dataset_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        resolved_directory = dataset_directory.resolve(strict=True)
+        resolved_directory.relative_to(workspace)
+    except (OSError, ValueError) as exc:
+        raise VideoProcessingError(
+            f'failed to prepare dataset manifest directory: {exc}'
+        ) from exc
+    return resolved_directory / f'{dataset_id}.json'
+
+
+def _persist_dataset_manifest(
+    workspace_root: Path,
+    manifest: dict[str, Any],
+) -> str:
+    dataset_id = str(manifest['dataset_id'])
+    with _locked_workspace_records(
+        workspace_root,
+        error_type=VideoProcessingError,
+    ):
+        manifest_path = _dataset_manifest_path(workspace_root, dataset_id)
+        temporary_path = manifest_path.parent / (
+            f'.{manifest_path.name}.{os.getpid()}.{threading.get_ident()}.tmp'
+        )
+        try:
+            temporary_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+                + '\n',
+                encoding='utf-8',
+            )
+            os.chmod(temporary_path, 0o600)
+            temporary_path.replace(manifest_path)
+        except (OSError, TypeError, ValueError) as exc:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise VideoProcessingError(
+                f'failed to persist dataset manifest: {exc}'
+            ) from exc
+
+    return manifest_path.relative_to(workspace_root.resolve()).as_posix()
 
 
 def submit_video_analysis(
@@ -1063,7 +1188,35 @@ def get_video_analysis_result(
 def get_video_processing_result(
     arguments: dict[str, Any],
     *,
+    workspace_root: Path,
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
     """Return the public dataset manifest for a completed processing task."""
-    raise VideoProcessingError('get_video_processing_result is registered but not implemented')
+    task_id = _require_string(
+        arguments,
+        'task_id',
+        error_type=VideoProcessingError,
+    )
+    endpoint = _result_endpoint(
+        os.environ.get(VIDEO_PROCESSING_API_ENV, ''),
+        task_id,
+        api_env=VIDEO_PROCESSING_API_ENV,
+        operation='video processing',
+        error_type=VideoProcessingError,
+    )
+    manifest = _get_processing_backend_manifest(endpoint, timeout_seconds)
+    dataset_id = str(manifest['dataset_id'])
+    manifest_path = _persist_dataset_manifest(workspace_root, manifest)
+    payload = {
+        'task_id': task_id,
+        'status': 'done',
+        'dataset_id': dataset_id,
+        'manifest_path': manifest_path,
+    }
+    _persist_task_result(
+        workspace_root,
+        'processing',
+        payload,
+        error_type=VideoProcessingError,
+    )
+    return _render_processing_result(payload)

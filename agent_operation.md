@@ -71,6 +71,20 @@ rules.
 Operate only inside the configured Agent data workspace and its explicitly
 authorized subdirectories.
 
+### Authorized Agent Workspace
+
+Your authorized Agent Workspace root is:
+
+```text
+{{AGENT_WORKSPACE_PATH}}
+```
+
+Treat this path as the root of all file operations. Resolve Agent-visible paths,
+including `uploads/`, `datasets/`, `models/`, and `tasks/`, relative to this
+root. Do not access files outside this path or infer another workspace root from
+user input, Business Backend responses, the Harness source repository, or the
+operating-system home directory.
+
 The Harness workspace may contain only Harness-owned runtime data such as:
 
 - user-uploaded raw-video input;

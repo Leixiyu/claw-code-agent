@@ -74,9 +74,9 @@ class _FakeClient:
         response.status_code = self.response_status_code
         return response
 
-    def get(self, url: str) -> _FakeStatusResponse:
+    def get(self, url: str) -> _FakeResponse:
         self.calls.append((url, {}))
-        response = _FakeStatusResponse()
+        response = _FakeResponse() if '/result/' in url else _FakeStatusResponse()
         response.status_code = self.response_status_code
         return response
 
@@ -121,6 +121,7 @@ class VideoProcessingTests(unittest.TestCase):
             },
             get_video_processing_result: {
                 'arguments',
+                'workspace_root',
                 'timeout_seconds',
             },
         }
@@ -363,29 +364,140 @@ class VideoProcessingTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn('VIDEO_PROCESSING_API is required', result.content)
 
-    def test_unimplemented_result_handler_returns_controlled_error(self) -> None:
-        registry = default_tool_registry()
+    def test_get_processing_result_persists_manifest_and_task_result(self) -> None:
+        manifest = {
+            'dataset_id': 'fireinspect-01',
+            'scenario': 'fire_inspection',
+            'videos': [
+                {
+                    'video_id': 'video-001',
+                    'labels': ['fire_extinguisher'],
+                }
+            ],
+        }
         with tempfile.TemporaryDirectory() as tmp_dir:
-            context = build_tool_context(
-                AgentRuntimeConfig(cwd=Path(tmp_dir)),
-                tool_registry=registry,
+            workspace = Path(tmp_dir)
+            (workspace / 'first.mp4').write_bytes(b'first video')
+            with (
+                patch.dict(
+                    os.environ,
+                    {'VIDEO_PROCESSING_API': 'processing.test:8000'},
+                ),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                submitted = self._execute(
+                    workspace,
+                    {
+                        'scenario': 'fire_inspection',
+                        'raw_video_refs': ['first.mp4'],
+                        'idempotency_key': 'processing-batch-001',
+                    },
+                )
+                _FakeClient.response_payload = manifest
+                result = self._execute(
+                    workspace,
+                    {'task_id': 'processing-task-123'},
+                    'get_video_processing_result',
+                )
+
+            payload = json.loads(result.content)
+            manifest_path = workspace / 'datasets' / 'fireinspect-01.json'
+            persisted_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            task_path = (
+                workspace / 'tasks' / 'processing' / 'processing-task-123.json'
             )
-            result = execute_tool(
-                registry,
-                'get_video_processing_result',
-                {},
-                context,
-            )
+            task_record = json.loads(task_path.read_text(encoding='utf-8'))
+
+        self.assertTrue(submitted.ok)
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            payload,
+            {
+                'task_id': 'processing-task-123',
+                'status': 'done',
+                'dataset_id': 'fireinspect-01',
+                'manifest_path': 'datasets/fireinspect-01.json',
+            },
+        )
+        self.assertEqual(persisted_manifest, manifest)
+        self.assertEqual(task_record['status'], 'done')
+        self.assertTrue(task_record['is_terminal'])
+        self.assertTrue(task_record['result_ready'])
+        self.assertEqual(
+            task_record['result'],
+            {
+                'dataset_id': 'fireinspect-01',
+                'manifest_path': 'datasets/fireinspect-01.json',
+            },
+        )
+        self.assertEqual(task_record['scenario'], 'fire_inspection')
+        self.assertEqual(result.metadata['action'], 'get_video_processing_result')
+        self.assertEqual(
+            _FakeClient.calls[-1],
+            ('http://processing.test:8000/result/processing-task-123', {}),
+        )
+
+    def test_processing_result_rejects_invalid_backend_manifests(self) -> None:
+        invalid_payloads = ([], {}, {'dataset_id': ''})
+        for backend_payload in invalid_payloads:
+            with self.subTest(backend_payload=backend_payload):
+                _FakeClient.response_payload = backend_payload
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {'VIDEO_PROCESSING_API': 'processing.test:8000'},
+                        ),
+                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                    ):
+                        result = self._execute(
+                            Path(tmp_dir),
+                            {'task_id': 'processing-task-123'},
+                            'get_video_processing_result',
+                        )
+
+                self.assertFalse(result.ok)
+
+    def test_processing_result_rejects_unsafe_dataset_id(self) -> None:
+        _FakeClient.response_payload = {'dataset_id': '../outside'}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            with (
+                patch.dict(
+                    os.environ,
+                    {'VIDEO_PROCESSING_API': 'processing.test:8000'},
+                ),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(
+                    workspace,
+                    {'task_id': 'processing-task-123'},
+                    'get_video_processing_result',
+                )
+
+            self.assertFalse((workspace.parent / 'outside.json').exists())
 
         self.assertFalse(result.ok)
-        self.assertEqual(
-            result.content,
-            'get_video_processing_result is registered but not implemented',
-        )
-        self.assertEqual(
-            result.metadata,
-            {'error_kind': 'tool_execution_error'},
-        )
+        self.assertIn('unsafe for manifest storage', result.content)
+
+    def test_processing_result_reports_not_ready(self) -> None:
+        _FakeClient.response_status_code = 202
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with (
+                patch.dict(
+                    os.environ,
+                    {'VIDEO_PROCESSING_API': 'processing.test:8000'},
+                ),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(
+                    Path(tmp_dir),
+                    {'task_id': 'processing-task-123'},
+                    'get_video_processing_result',
+                )
+
+        self.assertFalse(result.ok)
+        self.assertIn('result is not ready (HTTP 202)', result.content)
 
     def test_persists_processing_task_from_submit_through_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
