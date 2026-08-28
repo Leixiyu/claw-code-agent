@@ -247,8 +247,7 @@ claw-code-agent/
 │   ├── main.py                   # CLI entry point & argument parsing
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
-│   ├── video_analysis.py         # Video filepath/upload/COS Function and POC idempotency
-│   ├── video_processing.py       # Video-processing Function signatures and placeholders
+│   ├── video_analysis.py         # Analysis/Processing HTTP Functions and POC idempotency
 │   ├── model_training.py         # Model-training Function signatures and placeholders
 │   ├── agent_prompting.py        # System prompt assembly
 │   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
@@ -296,7 +295,7 @@ claw-code-agent/
     ├── test_agent_runtime.py
     ├── test_video_analysis.py        # Opt-in real HTTP video API workflow
     ├── test_video_analysis_unit.py   # Mocked video Function schemas and edge cases
-    ├── test_video_processing.py      # Video-processing Tool schema and placeholder tests
+    ├── test_video_processing.py      # Video-processing HTTP Function and Tool tests
     ├── test_model_training.py        # Model-training Tool schema and placeholder tests
     ├── test_agent_context.py
     ├── test_agent_context_usage.py

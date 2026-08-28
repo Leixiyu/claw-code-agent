@@ -33,7 +33,7 @@ class ModelTrainingTests(unittest.TestCase):
             with self.subTest(function=function.__name__):
                 self.assertEqual(
                     set(signature(function).parameters),
-                    {'arguments', 'timeout_seconds', 'mcp_runtime'},
+                    {'arguments', 'timeout_seconds'},
                 )
 
     def test_registers_all_model_training_tools(self) -> None:

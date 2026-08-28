@@ -45,11 +45,19 @@ class _FakeResponse:
         return _FakeClient.response_payload
 
 
+class _FakeStatusResponse(_FakeResponse):
+    def json(self) -> object:
+        if _FakeClient.json_error:
+            raise ValueError('invalid JSON')
+        return {'status': _FakeClient.backend_status}
+
+
 class _FakeClient:
     calls: list[tuple[str, dict[str, object]]] = []
     response_payload: object = {'task_id': 'processing-task-123'}
     response_status_code = 200
     json_error = False
+    backend_status = 'running'
 
     def __init__(self, *, timeout: float) -> None:
         self.timeout = timeout
@@ -66,6 +74,12 @@ class _FakeClient:
         response.status_code = self.response_status_code
         return response
 
+    def get(self, url: str) -> _FakeStatusResponse:
+        self.calls.append((url, {}))
+        response = _FakeStatusResponse()
+        response.status_code = self.response_status_code
+        return response
+
 
 class VideoProcessingTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -73,8 +87,14 @@ class VideoProcessingTests(unittest.TestCase):
         _FakeClient.response_payload = {'task_id': 'processing-task-123'}
         _FakeClient.response_status_code = 200
         _FakeClient.json_error = False
+        _FakeClient.backend_status = 'running'
 
-    def _execute(self, workspace: Path, arguments: dict[str, object]):
+    def _execute(
+        self,
+        workspace: Path,
+        arguments: dict[str, object],
+        tool_name: str = 'submit_video_processing',
+    ):
         registry = default_tool_registry()
         context = build_tool_context(
             AgentRuntimeConfig(cwd=workspace),
@@ -82,7 +102,7 @@ class VideoProcessingTests(unittest.TestCase):
         )
         return execute_tool(
             registry,
-            'submit_video_processing',
+            tool_name,
             arguments,
             context,
         )
@@ -93,17 +113,14 @@ class VideoProcessingTests(unittest.TestCase):
                 'arguments',
                 'workspace_root',
                 'timeout_seconds',
-                'mcp_runtime',
             },
             get_video_processing_status: {
                 'arguments',
                 'timeout_seconds',
-                'mcp_runtime',
             },
             get_video_processing_result: {
                 'arguments',
                 'timeout_seconds',
-                'mcp_runtime',
             },
         }
 
@@ -267,28 +284,107 @@ class VideoProcessingTests(unittest.TestCase):
 
                 self.assertFalse(result.ok)
 
-    def test_unimplemented_status_and_result_handlers_return_controlled_errors(self) -> None:
+    def test_returns_backend_processing_statuses_unchanged(self) -> None:
+        expected_statuses = {
+            'pending': (False, False),
+            'running': (False, False),
+            'done': (True, True),
+            'failed': (True, False),
+        }
+        for backend_status, expected in expected_statuses.items():
+            with self.subTest(backend_status=backend_status):
+                _FakeClient.calls = []
+                _FakeClient.backend_status = backend_status
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {'VIDEO_PROCESSING_API': 'processing.test:8000'},
+                        ),
+                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                    ):
+                        result = self._execute(
+                            Path(tmp_dir),
+                            {'task_id': 'processing-task-123'},
+                            'get_video_processing_status',
+                        )
+
+                payload = json.loads(result.content)
+                is_terminal, result_ready = expected
+                self.assertTrue(result.ok)
+                self.assertEqual(payload['task_id'], 'processing-task-123')
+                self.assertEqual(payload['status'], backend_status)
+                self.assertEqual(payload['is_terminal'], is_terminal)
+                self.assertEqual(payload['result_ready'], result_ready)
+                self.assertEqual(
+                    result.metadata['action'],
+                    'get_video_processing_status',
+                )
+                self.assertEqual(
+                    _FakeClient.calls,
+                    [
+                        (
+                            'http://processing.test:8000/status/'
+                            'processing-task-123',
+                            {},
+                        )
+                    ],
+                )
+
+    def test_rejects_unknown_backend_processing_status(self) -> None:
+        _FakeClient.backend_status = 'unknown'
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with (
+                patch.dict(
+                    os.environ,
+                    {'VIDEO_PROCESSING_API': 'processing.test:8000'},
+                ),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                result = self._execute(
+                    Path(tmp_dir),
+                    {'task_id': 'processing-task-123'},
+                    'get_video_processing_status',
+                )
+
+        self.assertFalse(result.ok)
+        self.assertIn("unsupported status 'unknown'", result.content)
+
+    def test_processing_status_requires_api_base_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch.dict(os.environ, {}, clear=True):
+                result = self._execute(
+                    Path(tmp_dir),
+                    {'task_id': 'processing-task-123'},
+                    'get_video_processing_status',
+                )
+
+        self.assertFalse(result.ok)
+        self.assertIn('VIDEO_PROCESSING_API is required', result.content)
+
+    def test_unimplemented_result_handler_returns_controlled_error(self) -> None:
         registry = default_tool_registry()
         with tempfile.TemporaryDirectory() as tmp_dir:
             context = build_tool_context(
                 AgentRuntimeConfig(cwd=Path(tmp_dir)),
                 tool_registry=registry,
             )
-            for name in {
-                'get_video_processing_status',
+            result = execute_tool(
+                registry,
                 'get_video_processing_result',
-            }:
-                with self.subTest(tool=name):
-                    result = execute_tool(registry, name, {}, context)
-                    self.assertFalse(result.ok)
-                    self.assertEqual(
-                        result.content,
-                        f'{name} is registered but not implemented',
-                    )
-                    self.assertEqual(
-                        result.metadata,
-                        {'error_kind': 'tool_execution_error'},
-                    )
+                {},
+                context,
+            )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(
+            result.content,
+            'get_video_processing_result is registered but not implemented',
+        )
+        self.assertEqual(
+            result.metadata,
+            {'error_kind': 'tool_execution_error'},
+        )
 
 
 if __name__ == '__main__':

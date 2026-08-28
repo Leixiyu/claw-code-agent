@@ -350,8 +350,7 @@ def default_tool_registry() -> dict[str, AgentTool]:
         AgentTool(
             name='get_video_processing_status',
             description=(
-                'Query the status of a video-processing task. This contract is registered '
-                'for integration work, but its backend implementation is not connected yet.'
+                'Query the current status of a previously submitted video-processing task.'
             ),
             parameters={
                 'type': 'object',
@@ -1549,15 +1548,13 @@ def _submit_video_processing(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_analysis import submit_video_processing
-    from .video_analysis import VideoProcessingError
+    from .video_analysis import VideoProcessingError, submit_video_processing
 
     try:
         return submit_video_processing(
             arguments,
             workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
-            mcp_runtime=context.mcp_runtime,
         )
     except VideoProcessingError as exc:
         raise ToolExecutionError(str(exc)) from exc
@@ -1573,7 +1570,6 @@ def _get_video_processing_status(
         return get_video_processing_status(
             arguments,
             timeout_seconds=context.command_timeout_seconds,
-            mcp_runtime=context.mcp_runtime,
         )
     except VideoProcessingError as exc:
         raise ToolExecutionError(str(exc)) from exc
@@ -1589,7 +1585,6 @@ def _get_video_processing_result(
         return get_video_processing_result(
             arguments,
             timeout_seconds=context.command_timeout_seconds,
-            mcp_runtime=context.mcp_runtime,
         )
     except VideoProcessingError as exc:
         raise ToolExecutionError(str(exc)) from exc
@@ -1605,7 +1600,6 @@ def _submit_model_training(
         return submit_model_training(
             arguments,
             timeout_seconds=context.command_timeout_seconds,
-            mcp_runtime=context.mcp_runtime,
         )
     except ModelTrainingError as exc:
         raise ToolExecutionError(str(exc)) from exc
@@ -1621,7 +1615,6 @@ def _get_model_training_status(
         return get_model_training_status(
             arguments,
             timeout_seconds=context.command_timeout_seconds,
-            mcp_runtime=context.mcp_runtime,
         )
     except ModelTrainingError as exc:
         raise ToolExecutionError(str(exc)) from exc
@@ -1637,7 +1630,6 @@ def _get_model_training_result(
         return get_model_training_result(
             arguments,
             timeout_seconds=context.command_timeout_seconds,
-            mcp_runtime=context.mcp_runtime,
         )
     except ModelTrainingError as exc:
         raise ToolExecutionError(str(exc)) from exc

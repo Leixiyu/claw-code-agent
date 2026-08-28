@@ -1,11 +1,11 @@
 # 视频处理 Agent：当前进度与待开发适配需求
 
 > 本文档是 Harness 接入视频业务的阶段性记录，初始快照日期为
-> **2026-07-25**，最近更新日期为 **2026-08-23**。
+> **2026-07-25**，最近更新日期为 **2026-08-28**。
 >
 > 当前代码状态：Video Analysis 的 3 个 Functions 已实现 HTTP POC；
-> Video Processing 和 Model Training 的 6 个 Functions 已注册 Tool
-> Schema、函数签名和安全占位处理，但尚未连接 Business MCP Backend。
+> Video Processing 的 submit/status 已实现 HTTP POC，result 尚未实现；
+> Model Training 的 3 个 Functions 已注册 Tool Schema 和安全占位处理。
 
 ## 1. 目标业务
 
@@ -23,8 +23,9 @@ LLM 只负责理解用户意图、识别 `scenario` 和选择受控 Function。�
 
 ## 2. 最新系统边界
 
-Harness Service 和 Business Service 必须完全隔离，不共享源代码、文件系统或
-数据库。最终业务控制入口只能是已注册的 MCP Tools。
+Harness Service 和 Business Service 保持隔离，不共享源代码、文件系统或
+数据库。当前统一由 Harness 中已注册的业务 Functions 调用受信任的 Business
+HTTP API；LLM 不能直接构造 URL、HTTP 请求或认证信息。
 
 ```text
 User / 上层应用
@@ -33,12 +34,12 @@ User / 上层应用
 Harness Service
   - LLM Agent
   - Tool Registry
-  - MCP Client
+  - Business HTTP Functions
   - raw video workspace
         |
-        | MCP Tool Contract
+        | Registered Function + HTTP API Contract
         v
-Business MCP Server
+Business Backend APIs
   - Video Processing
   - Model Training
   - Video Analysis
@@ -47,8 +48,9 @@ Business MCP Server
 Business-owned datasets / models / results
 ```
 
-当前 Video Analysis 仍通过 `VIDEO_ANALYSIS_API` 直接调用 HTTP API，这是
-过渡期 POC，还不符合最终 MCP-only 边界。
+Analysis、Processing 和未来的 Training HTTP 请求都由 Harness Function
+执行。Business API 地址来自 Harness 的受信任配置，不从用户输入或 LLM
+arguments 获取。
 
 ## 3. 不同角色的信息视图
 
@@ -84,7 +86,7 @@ Business Backend 负责：
 - 在对应 `scenario` 下保存 processed datasets、labels 和内部 manifest；
 - 在对应 `scenario` 下保存 model artifacts、metrics 和内部 metadata；
 - 保存分析任务状态和结果；
-- 将内部记录转换成不包含物理路径的 Agent-safe MCP 返回值。
+- 将内部记录转换成不包含物理路径的 Agent-safe Function 返回值。
 
 ## 4. 数据所有权和文件边界
 
@@ -100,9 +102,9 @@ Business Backend 负责：
 
 Harness Workspace 不应保存 processed dataset 实体、label 文件、checkpoint 或
 model weights。Harness 与 Business 不共享物理路径；Agent Tool Arguments 只传递
-`raw_video_ref`、`dataset_ref`、`model_name` 和 `task_id` 等逻辑引用。raw video
-二进制内容如需跨边界传输，必须交给 MCP 层的受控 Data Transfer Contract，
-不进入 LLM arguments。
+`dataset_ref`、`model_name` 和 `task_id` 等逻辑引用。当前 Processing 的
+`raw_video_refs` 是 Harness Workspace 中用户上传视频的路径，由 Harness
+Function 读取并通过 multipart HTTP 上传；视频二进制内容不进入 LLM context。
 
 ## 5. 当前九个业务 Functions
 
@@ -111,14 +113,14 @@ model weights。Harness 与 Business 不共享物理路径；Agent Tool Argument
 | Analysis | `submit_video_analysis` | 已注册 | 已实现 | HTTP POC |
 | Analysis | `get_video_analysis_status` | 已注册 | 已实现 | HTTP POC |
 | Analysis | `get_video_analysis_result` | 已注册 | 已实现 | HTTP POC |
-| Processing | `submit_video_processing` | 已注册 | 已创建 | 未连接 |
-| Processing | `get_video_processing_status` | 已注册 | 已创建 | 未连接 |
+| Processing | `submit_video_processing` | 已注册 | 已实现 | HTTP POC |
+| Processing | `get_video_processing_status` | 已注册 | 已实现 | HTTP POC |
 | Processing | `get_video_processing_result` | 已注册 | 已创建 | 未连接 |
 | Training | `submit_model_training` | 已注册 | 已创建 | 未连接 |
 | Training | `get_model_training_status` | 已注册 | 已创建 | 未连接 |
 | Training | `get_model_training_result` | 已注册 | 已创建 | 未连接 |
 
-当前六个占位 Function 被调用时会返回受控错误：
+当前四个占位 Function 被调用时会返回受控错误：
 
 ```text
 <function_name> is registered but not implemented
@@ -144,7 +146,7 @@ get_video_analysis_result(task_id)
 - `status` 返回 `task_id`、`status`、`is_terminal` 和 `result_ready`。
 - `result` 返回 `task_id`、`status="done"`、`result_count` 和 `results`。
 
-### Video Processing Skeleton
+### Video Processing
 
 ```text
 submit_video_processing(scenario, raw_video_refs, idempotency_key)
@@ -152,7 +154,9 @@ get_video_processing_status(task_id)
 get_video_processing_result(task_id)
 ```
 
-- `raw_video_refs` 是由 Harness 创建的一个或多个 opaque references。
+- `raw_video_refs` 是 Harness 服务器上一个或多个用户上传视频的文件路径；
+  相对路径从 Agent Workspace 解析，并由 Harness multipart 上传。
+- `submit` 和 `status` 的状态及返回 envelope 与 Analysis 对齐。
 - `get_video_processing_result` 未来返回 public dataset manifest 和
   `dataset_ref`，不返回 Business 物理路径。
 
@@ -177,7 +181,6 @@ Business Backend 确认，不应根据文档自行假定。
 src/
 ├── agent_tools.py
 ├── video_analysis.py
-├── video_processing.py
 └── model_training.py
 
 tests/
@@ -189,21 +192,21 @@ tests/
 
 - `test_video_analysis.py` 是需要显式启用的真实 HTTP 集成测试。
 - `test_video_analysis_unit.py` 验证已实现的 Analysis Functions。
-- `test_video_processing.py` 和 `test_model_training.py` 当前只验证函数签名、
-  Tool Schema、注册和受控未实现错误。
-- 上述三个业务单元测试文件目前共 29 个相关测试通过。
+- `test_video_processing.py` 验证 Processing submit/status HTTP POC、Tool Schema
+  和尚未实现的 result。
+- `test_model_training.py` 验证 Training 函数签名、Tool Schema、注册和受控
+  未实现错误。
+- 当前三个业务单元测试文件共 37 个相关测试通过。
 
 ## 8. 当前限制
 
-- Video Analysis 仍是直接 HTTP POC，未迁移到 Business MCP Server。
-- Video Analysis 仍可以在 Tool Contract 中接收和返回物理路径，与最终
-  opaque-reference 设计尚未完全对齐。
-- Video Processing 和 Model Training 只有 Skeleton，没有参数校验、MCP
-  调用、幂等持久化、状态处理或 result rendering。
-- `MCPRuntime` 当前支持本地 manifest 和 stdio MCP transport；最终
-  Business MCP 的部署位置、传输方式、认证和超时尚未确定。
-- Harness 和 Business 不共享文件系统，大视频如何跨越 MCP 边界尚需
-  明确 Data Transfer Contract；不应将视频 Base64 放入 LLM Tool Arguments。
+- Video Analysis 和 Video Processing 仍是直接 HTTP POC，尚未加入生产级
+  服务认证、限流、审计和可恢复任务存储。
+- Analysis Tool Contract 仍支持 Business 服务器路径和 COS 路径；Processing
+  当前只支持 Harness 服务器上的上传文件。
+- Video Processing result 和三个 Model Training Functions 尚未实现。
+- Harness 负责通过 HTTP 上传 raw video；应继续验证大文件超时、流式传输、
+  文件大小限制和失败重试，不应将视频 Base64 放入 LLM Tool Arguments。
 - 当前只有 `fire_inspection` 一个 scenario，尚无正式 Scenario Registry。
 - Agent session 和 `.port_sessions` 不是业务任务的权威数据库。
 - Harness 后台进程状态不代表 Business 任务状态。
@@ -217,13 +220,13 @@ tests/
 | `DASHSCOPE_API_KEY` / `OPENAI_API_KEY` | 已接入 | LLM provider 凭据 |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | 已接入 | OpenAI-compatible 模型服务 |
 | `AGENT_WORKSPACE` | 已接入 | Harness 的受控 Agent Workspace |
-| `VIDEO_ANALYSIS_API` | 过渡期已接入 | Video Analysis HTTP POC |
-| `.claw-mcp.json` / `.mcp.json` | Harness 能力已有 | 发现 MCP Server、Resources 和 Tools |
-| Business MCP Server 配置与凭据 | 未确定 | 最终三个业务模块的唯一控制入口 |
+| `VIDEO_ANALYSIS_API` | 已接入 | Video Analysis HTTP API |
+| `VIDEO_PROCESSING_API` | 已接入 | Video Processing HTTP API |
+| `MODEL_TRAINING_API` | 待接入 | Model Training HTTP API |
 
 `BUSINESS_API_*`、`TASK_API_*`、`VIDEO_OUTPUT_DIR` 和 `TASK_LOG_DIR` 等早期预留
-变量尚未接入当前代码。最终 MCP-only 设计不应默认让 Harness 直接持有
-Business API Token、processed dataset 目录或 model 目录。
+变量尚未接入当前代码。Harness 可持有调用 Business API 所需的最小权限
+服务凭据，但不应持有 processed dataset 目录或 model 目录的文件系统访问权。
 
 ## 10. 待开发：P0（九个 Functions POC）
 
@@ -231,24 +234,23 @@ Business API Token、processed dataset 目录或 model 目录。
   Contract。
 - [ ] 与 Business 同事确认 Model Training 的 input、status、result 和 error
   Contract。
-- [ ] 定义 raw video 跨越 Harness/Business 边界的 Data Transfer Contract，不向
-  LLM 暴露上传凭据或物理路径。
-- [ ] 实现 `submit_video_processing`、`get_video_processing_status` 和
-  `get_video_processing_result` 的 Business MCP 调用。
+- [x] 实现 `submit_video_processing` 和 `get_video_processing_status` 的
+  Harness HTTP 调用。
+- [ ] 实现 `get_video_processing_result` 的 Harness HTTP 调用。
 - [ ] 实现 `submit_model_training`、`get_model_training_status` 和
-  `get_model_training_result` 的 Business MCP 调用。
-- [ ] 将 Video Analysis 从直接 HTTP 调用迁移到 Business MCP Tool，同时决定是否
-  保留当前 HTTP adapter 作为过渡或测试层。
+  `get_model_training_result` 的 Harness HTTP 调用。
+- [ ] 定义 raw video 从 Harness 上传到 Business API 的大文件传输、
+  超时、重试和大小限制 Contract。
 - [ ] 统一三个模块的 submit/status/result envelope，但不擅自重命名 Business
   Backend 的权威状态。
 - [ ] 为两个新模块实现参数校验、幂等、超时、错误转换和安全
   result rendering。
 - [ ] 实现 Scenario Registry，统一管理 scenario、允许的操作和 Business
-  MCP Tool 映射。
+  API 映射。
 - [ ] 使用 SQLite 或 PostgreSQL 保存可恢复的业务任务引用，不依赖 LLM
   session 作为权威状态。
-- [ ] 为六个新 Functions 增加 Mock MCP 测试；实现后再增加显式启用的真实
-  Business MCP 集成测试。
+- [ ] 为未实现 Functions 增加 HTTPX Mock 测试；实现后再增加
+  显式启用的真实 Business HTTP 集成测试。
 - [ ] 当 scenario 或必填参数不明确时让 Agent 请求最小必要补充，不得猜测或
   生成未注册引用。
 
@@ -260,8 +262,8 @@ Business API Token、processed dataset 目录或 model 目录。
 
 - [ ] 将运行时能力限定为当前 9 个 Functions，将部署、回滚、日志读取等
   未注册能力放入 future extension。
-- [ ] 明确 Tool 可用的条件为 Schema 已注册、handler 已实现、Business MCP
-  已连接且 policy 允许；不能只以“已注册”判断可用。
+- [ ] 明确 Tool 可用的条件为 Schema 已注册、handler 已实现、Business API
+  已配置且 policy 允许；不能只以“已注册”判断可用。
 - [ ] 写入 User / Agent / Business Backend 三层信息视图和输出过滤规则。
 - [ ] 规定 dataset manifest、`dataset_ref` 和 `model_name` 只能用于 Agent 内部
   Tool 编排，不向普通用户展示。
@@ -271,14 +273,15 @@ Business API Token、processed dataset 目录或 model 目录。
   `registered but not implemented` 错误。
 - [ ] 在 Business Contract 确认后补充 Processing/Training 的返回字段、权威
   状态、幂等、超时、重试和轮询规则。
-- [ ] 使用 Mock MCP 验证场景路由、缺失参数、Tool 不可用、越权请求、
+- [ ] 使用 HTTPX Mock 验证场景路由、缺失参数、Tool 不可用、越权请求、
   异步状态和 Prompt Injection 防护。
 - [ ] 审核通过后，将 `agent_operation.md` 正式部署为 Agent Data Folder 中只读的
   `CLAUDE.md`。
 
 ## 12. 待开发：P1（生产级业务接入）
 
-- [ ] 为 Business MCP 实现服务身份认证、最小权限、超时、限流和错误分类。
+- [ ] 为 Business HTTP API 实现服务身份认证、最小权限、超时、
+  限流和错误分类。
 - [ ] 为所有创建类操作实现 application-created idempotency key 和跨实例请求去重。
 - [ ] 明确 Business 任务的 Webhook 或可恢复低频轮询机制，并验证回调身份。
 - [ ] 建立 dataset 和 model 的 scenario 隔离、版本、保留、归档和删除策略。
@@ -295,7 +298,7 @@ Business API Token、processed dataset 目录或 model 目录。
 - [ ] 在业务需求确认后，再设计模型验证、审批、部署、灰度、健康检查和回滚
   Functions；这些能力不属于当前 9 个 Functions。
 - [ ] 增加多 scenario 路由、数据隔离和模型选择评测。
-- [ ] 针对 Prompt Injection、恶意视频元数据、伪造 manifest、恶意 MCP 结果和
+- [ ] 针对 Prompt Injection、恶意视频元数据、伪造 manifest、恶意 API 结果和
   越权 Tool Call 建立安全测试。
 - [ ] 对候选 Qwen 模型进行 scenario 分类、Tool Call 成功率、延迟和成本评测。
 
@@ -314,9 +317,9 @@ Business API Token、processed dataset 目录或 model 目录。
 - [ ] 将部署版本中的 `agent_operation.md` 原子替换到 Agent Data Folder，并命名为
   只读 `CLAUDE.md`。
 - [ ] 不覆盖 raw videos、references、任务状态、Session 或其他业务数据。
-- [ ] 不创建、复制、打印或覆盖 `.env`、LLM API Key 和 Business MCP 凭据。
+- [ ] 不创建、复制、打印或覆盖 `.env`、LLM API Key 和 Business API 凭据。
 - [ ] 更新虚拟环境和 Python 依赖，并在需要时执行配置迁移。
-- [ ] 重启或平滑重载 Harness，检查 `CLAUDE.md` 加载、MCP 连接、九个 Tool
+- [ ] 重启或平滑重载 Harness，检查 `CLAUDE.md` 加载、Business API 连通性、九个 Tool
   Schema 和基础健康状态。
 - [ ] 记录部署时间、Git commit、目标目录、服务状态和健康检查结果，并在
   部署失败时恢复到上一个已验证版本。

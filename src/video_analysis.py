@@ -7,12 +7,9 @@ import threading
 from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Iterator
 
 import httpx
-
-if TYPE_CHECKING:
-    from .mcp_runtime import MCPRuntime
 
 
 VIDEO_ANALYSIS_API_ENV = 'VIDEO_ANALYSIS_API'
@@ -20,7 +17,7 @@ VIDEO_PROCESSING_API_ENV = 'VIDEO_PROCESSING_API'
 SUPPORTED_SCENARIOS = frozenset({'fire_inspection'})
 VIDEO_REF_TYPES = frozenset({'upload_file', 'local_file', 'cos_file'})
 
-_VIDEO_ANALYSIS_STATUSES = frozenset({'pending', 'running', 'done', 'failed'})
+_VIDEO_TASK_STATUSES = frozenset({'pending', 'running', 'done', 'failed'})
 
 _BUSINESS_FUNCTIONS_DIRECTORY = Path('.port_sessions') / 'business_functions'
 _ANALYSIS_IDEMPOTENCY_FILE = 'video_analysis_idempotency.json'
@@ -93,11 +90,18 @@ def _processing_endpoint(base_url: str) -> str:
     return f'{normalized}/process'
 
 
-def _status_endpoint(base_url: str, task_id: str) -> str:
+def _status_endpoint(
+    base_url: str,
+    task_id: str,
+    *,
+    api_env: str = VIDEO_ANALYSIS_API_ENV,
+    operation: str = 'video analysis',
+    error_type: type[RuntimeError] = VideoAnalysisError,
+) -> str:
     normalized = base_url.strip().rstrip('/')
     if not normalized:
-        raise VideoAnalysisError(
-            f'{VIDEO_ANALYSIS_API_ENV} is required to query video analysis status'
+        raise error_type(
+            f'{api_env} is required to query {operation} status'
         )
     if '://' not in normalized:
         normalized = f'http://{normalized}'
@@ -151,16 +155,21 @@ def _task_id_from_response(
     return task_id
 
 
-def _status_from_response(response: httpx.Response) -> str:
+def _status_from_response(
+    response: httpx.Response,
+    *,
+    operation: str = 'video analysis',
+    error_type: type[RuntimeError] = VideoAnalysisError,
+) -> str:
     try:
         payload = response.json()
     except ValueError as exc:
-        raise VideoAnalysisError('video analysis status API returned invalid JSON') from exc
+        raise error_type(f'{operation} status API returned invalid JSON') from exc
     if not isinstance(payload, dict):
-        raise VideoAnalysisError('video analysis status API response must be a JSON object')
+        raise error_type(f'{operation} status API response must be a JSON object')
     status = payload.get('status')
     if not isinstance(status, str) or not status:
-        raise VideoAnalysisError('video analysis status API response is missing status')
+        raise error_type(f'{operation} status API response is missing status')
     return status
 
 
@@ -264,18 +273,30 @@ def _post_cos_video(endpoint: str, cos_path: str, timeout_seconds: float) -> str
     return _task_id_from_response(response)
 
 
-def _get_backend_status(endpoint: str, timeout_seconds: float) -> str:
+def _get_backend_status(
+    endpoint: str,
+    timeout_seconds: float,
+    *,
+    operation: str = 'video analysis',
+    error_type: type[RuntimeError] = VideoAnalysisError,
+) -> str:
     try:
         with httpx.Client(timeout=timeout_seconds) as client:
             response = client.get(endpoint)
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
-        raise VideoAnalysisError(f'video analysis status API returned HTTP {status_code}') from exc
+        raise error_type(
+            f'{operation} status API returned HTTP {status_code}'
+        ) from exc
     except httpx.HTTPError as exc:
-        raise VideoAnalysisError(f'failed to call video analysis status API: {exc}') from exc
+        raise error_type(f'failed to call {operation} status API: {exc}') from exc
 
-    return _status_from_response(response)
+    return _status_from_response(
+        response,
+        operation=operation,
+        error_type=error_type,
+    )
 
 
 def _get_backend_result(
@@ -378,11 +399,15 @@ def _render_processing_submit_result(
     )
 
 
-def _render_status_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _render_status_result(
+    payload: dict[str, Any],
+    *,
+    action: str = 'get_video_analysis_status',
+) -> tuple[str, dict[str, Any]]:
     return (
         json.dumps(payload, ensure_ascii=False, indent=2),
         {
-            'action': 'get_video_analysis_status',
+            'action': action,
             'task_id': payload['task_id'],
             'status': payload['status'],
             'is_terminal': payload['is_terminal'],
@@ -547,11 +572,8 @@ def submit_video_processing(
     *,
     workspace_root: Path,
     timeout_seconds: float,
-    mcp_runtime: MCPRuntime | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Upload raw Harness-hosted videos for labeling and dataset preparation."""
-    del mcp_runtime
-
     scenario = _require_string(
         arguments,
         'scenario',
@@ -649,17 +671,16 @@ def submit_video_processing(
 def get_video_analysis_status(
     arguments: dict[str, Any],
     *,
-    timeout_seconds: float,
-    base_url: str | None = None,
+    timeout_seconds: float
 ) -> tuple[str, dict[str, Any]]:
     """Query and normalize the current state of a video-analysis task."""
     task_id = _require_string(arguments, 'task_id')
     endpoint = _status_endpoint(
-        base_url or os.environ.get(VIDEO_ANALYSIS_API_ENV, ''),
+        os.environ.get(VIDEO_ANALYSIS_API_ENV, ''),
         task_id,
     )
     status = _get_backend_status(endpoint, timeout_seconds)
-    if status not in _VIDEO_ANALYSIS_STATUSES:
+    if status not in _VIDEO_TASK_STATUSES:
         raise VideoAnalysisError(
             f'video analysis status API returned unsupported status {status!r}'
         )
@@ -677,10 +698,41 @@ def get_video_processing_status(
     arguments: dict[str, Any],
     *,
     timeout_seconds: float,
-    mcp_runtime: MCPRuntime | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Return the authoritative status of a video-processing task."""
-    raise VideoProcessingError('get_video_processing_status is registered but not implemented')
+    """Query and normalize the current state of a video-processing task."""
+    task_id = _require_string(
+        arguments,
+        'task_id',
+        error_type=VideoProcessingError,
+    )
+    endpoint = _status_endpoint(
+        os.environ.get(VIDEO_PROCESSING_API_ENV, ''),
+        task_id,
+        api_env=VIDEO_PROCESSING_API_ENV,
+        operation='video processing',
+        error_type=VideoProcessingError,
+    )
+    status = _get_backend_status(
+        endpoint,
+        timeout_seconds,
+        operation='video processing',
+        error_type=VideoProcessingError,
+    )
+    if status not in _VIDEO_TASK_STATUSES:
+        raise VideoProcessingError(
+            f'video processing status API returned unsupported status {status!r}'
+        )
+
+    payload = {
+        'task_id': task_id,
+        'status': status,
+        'is_terminal': status in {'done', 'failed'},
+        'result_ready': status == 'done',
+    }
+    return _render_status_result(
+        payload,
+        action='get_video_processing_status',
+    )
 
 
 def get_video_analysis_result(
@@ -709,7 +761,6 @@ def get_video_processing_result(
     arguments: dict[str, Any],
     *,
     timeout_seconds: float,
-    mcp_runtime: MCPRuntime | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Return the public dataset manifest for a completed processing task."""
     raise VideoProcessingError('get_video_processing_result is registered but not implemented')
