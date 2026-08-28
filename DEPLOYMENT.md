@@ -140,7 +140,7 @@ VIDEO_OUTPUT_DIR=/home/atis/Documents/RAY/claw_agent_data/video-output
 VIDEO_TEMP_DIR=/home/atis/Documents/RAY/claw_agent_data/video-temp
 TASK_LOG_DIR=/home/atis/Documents/RAY/claw_agent_data/logs
 
-INFERENCE_API_BASE_URL=
+VIDEO_ANALYSIS_API=
 BUSINESS_API_TOKEN=
 TASK_API_BASE_URL=
 TASK_API_TOKEN=

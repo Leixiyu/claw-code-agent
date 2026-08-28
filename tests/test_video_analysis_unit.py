@@ -148,7 +148,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
         _FakeClient.result_payload = backend_results
         with tempfile.TemporaryDirectory() as tmp_dir:
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
@@ -178,7 +178,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                     with (
                         patch.dict(
                             os.environ,
-                            {'INFERENCE_API_BASE_URL': 'video.test:8000'},
+                            {'VIDEO_ANALYSIS_API': 'video.test:8000'},
                         ),
                         patch('src.video_analysis.httpx.Client', _FakeClient),
                     ):
@@ -195,7 +195,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
         _FakeClient.result_json_error = True
         with tempfile.TemporaryDirectory() as tmp_dir:
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
@@ -216,7 +216,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                     with (
                         patch.dict(
                             os.environ,
-                            {'INFERENCE_API_BASE_URL': 'video.test:8000'},
+                            {'VIDEO_ANALYSIS_API': 'video.test:8000'},
                         ),
                         patch('src.video_analysis.httpx.Client', _FakeClient),
                     ):
@@ -244,7 +244,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                     with (
                         patch.dict(
                             os.environ,
-                            {'INFERENCE_API_BASE_URL': 'video.test:8000'},
+                            {'VIDEO_ANALYSIS_API': 'video.test:8000'},
                         ),
                         patch('src.video_analysis.httpx.Client', _FakeClient),
                     ):
@@ -271,7 +271,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
         _FakeClient.backend_status = 'unknown'
         with tempfile.TemporaryDirectory() as tmp_dir:
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
@@ -292,7 +292,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
@@ -319,7 +319,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
@@ -361,7 +361,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'http://video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'http://video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 first = self._execute(workspace, arguments)
@@ -388,7 +388,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                 'idempotency_key': 'test-fire_inspection-260101-120000',
             }
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
@@ -408,7 +408,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
             video_system_path = str(Path(workspace_dir) / 'missing-on-agent-server.mp4')
             self.assertFalse(Path(video_system_path).exists())
             with (
-                patch.dict(os.environ, {'INFERENCE_API_BASE_URL': 'http://video.test:8000'}),
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'http://video.test:8000'}),
                 patch('src.video_analysis.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
@@ -485,7 +485,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                 )
 
         self.assertFalse(result.ok)
-        self.assertIn('INFERENCE_API_BASE_URL is required', result.content)
+        self.assertIn('VIDEO_ANALYSIS_API is required', result.content)
 
 
 if __name__ == '__main__':

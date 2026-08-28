@@ -47,9 +47,9 @@ class VideoAnalysisIntegrationTests(unittest.TestCase):
                 'set RUN_VIDEO_ANALYSIS_INTEGRATION=1 to call the real video API'
             )
 
-        cls.base_url = os.environ.get('INFERENCE_API_BASE_URL', '').strip().rstrip('/')
+        cls.base_url = os.environ.get('VIDEO_ANALYSIS_API', '').strip().rstrip('/')
         if not cls.base_url:
-            raise unittest.SkipTest('INFERENCE_API_BASE_URL is missing from .env')
+            raise unittest.SkipTest('VIDEO_ANALYSIS_API is missing from .env')
         if '://' not in cls.base_url:
             cls.base_url = f'http://{cls.base_url}'
 

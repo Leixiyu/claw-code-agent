@@ -47,7 +47,7 @@ Business MCP Server
 Business-owned datasets / models / results
 ```
 
-当前 Video Analysis 仍通过 `INFERENCE_API_BASE_URL` 直接调用 HTTP API，这是
+当前 Video Analysis 仍通过 `VIDEO_ANALYSIS_API` 直接调用 HTTP API，这是
 过渡期 POC，还不符合最终 MCP-only 边界。
 
 ## 3. 不同角色的信息视图
@@ -217,7 +217,7 @@ tests/
 | `DASHSCOPE_API_KEY` / `OPENAI_API_KEY` | 已接入 | LLM provider 凭据 |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | 已接入 | OpenAI-compatible 模型服务 |
 | `AGENT_WORKSPACE` | 已接入 | Harness 的受控 Agent Workspace |
-| `INFERENCE_API_BASE_URL` | 过渡期已接入 | Video Analysis HTTP POC |
+| `VIDEO_ANALYSIS_API` | 过渡期已接入 | Video Analysis HTTP POC |
 | `.claw-mcp.json` / `.mcp.json` | Harness 能力已有 | 发现 MCP Server、Resources 和 Tools |
 | Business MCP Server 配置与凭据 | 未确定 | 最终三个业务模块的唯一控制入口 |
 

@@ -311,9 +311,10 @@ def default_tool_registry() -> dict[str, AgentTool]:
             name='submit_video_processing',
             description=(
                 'Submit raw videos for asynchronous labeling and dataset preparation. '
-                'raw_video_refs must be trusted logical references created by the Harness. '
-                'This contract is registered for integration work, but its backend '
-                'implementation is not connected yet.'
+                'Each raw_video_refs item must identify a video file available on the '
+                'Agent Harness server. The Harness uploads those files to the configured '
+                'video-processing API. The idempotency key must be created by the '
+                'application, not invented by the LLM.'
             ),
             parameters={
                 'type': 'object',
@@ -328,8 +329,9 @@ def default_tool_registry() -> dict[str, AgentTool]:
                         'items': {'type': 'string'},
                         'minItems': 1,
                         'description': (
-                            'Harness-created opaque references for the uploaded raw videos. '
-                            'Do not substitute backend paths or model-generated references.'
+                            'Paths to user-uploaded raw-video files available on the Agent '
+                            'Harness server. Relative paths are resolved from the Agent '
+                            'workspace.'
                         ),
                     },
                     'idempotency_key': {
@@ -1547,7 +1549,8 @@ def _submit_video_processing(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_processing import VideoProcessingError, submit_video_processing
+    from .video_analysis import submit_video_processing
+    from .video_analysis import VideoProcessingError
 
     try:
         return submit_video_processing(
@@ -1564,7 +1567,7 @@ def _get_video_processing_status(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_processing import VideoProcessingError, get_video_processing_status
+    from .video_analysis import VideoProcessingError, get_video_processing_status
 
     try:
         return get_video_processing_status(
@@ -1580,7 +1583,7 @@ def _get_video_processing_result(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_processing import VideoProcessingError, get_video_processing_result
+    from .video_analysis import VideoProcessingError, get_video_processing_result
 
     try:
         return get_video_processing_result(

@@ -116,7 +116,7 @@ therefore uploads or references a real video and creates a real backend task.
 Configure the target and test input in the repository `.env`:
 
 ```dotenv
-INFERENCE_API_BASE_URL="http://127.0.0.1:18000"
+VIDEO_ANALYSIS_API="http://127.0.0.1:18000"
 VIDEO_ANALYSIS_TEST_VIDEO_TYPE="upload_file"
 VIDEO_ANALYSIS_TEST_VIDEO_PATH="/absolute/path/to/test.mp4"
 VIDEO_ANALYSIS_TEST_SCENARIO="fire_inspection"
