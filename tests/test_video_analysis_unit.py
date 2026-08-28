@@ -487,6 +487,65 @@ class VideoAnalysisUnitTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn('VIDEO_ANALYSIS_API is required', result.content)
 
+    def test_persists_analysis_task_from_submit_through_result(self) -> None:
+        backend_results = [{'category_name': 'fire_extinguisher', 'is_detected': True}]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            arguments = {
+                'scenario': 'fire_inspection',
+                'video_ref': {'type': 'local_file', 'path': '/videos/test.mp4'},
+                'idempotency_key': 'test-fire_inspection-260101-120000',
+            }
+            with (
+                patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                submitted = self._execute(workspace, arguments)
+                task_path = workspace / 'tasks' / 'analysis' / 'task-123.json'
+                submitted_record = json.loads(task_path.read_text(encoding='utf-8'))
+
+                _FakeClient.backend_status = 'running'
+                status = self._execute(
+                    workspace,
+                    {'task_id': 'task-123'},
+                    'get_video_analysis_status',
+                )
+                running_record = json.loads(task_path.read_text(encoding='utf-8'))
+
+                _FakeClient.result_payload = backend_results
+                result = self._execute(
+                    workspace,
+                    {'task_id': 'task-123'},
+                    'get_video_analysis_result',
+                )
+                completed_record = json.loads(task_path.read_text(encoding='utf-8'))
+
+        self.assertTrue(submitted.ok)
+        self.assertTrue(status.ok)
+        self.assertTrue(result.ok)
+        self.assertEqual(submitted_record['schema_version'], 1)
+        self.assertEqual(submitted_record['task_id'], 'task-123')
+        self.assertEqual(submitted_record['module'], 'analysis')
+        self.assertEqual(submitted_record['scenario'], 'fire_inspection')
+        self.assertEqual(submitted_record['status'], 'pending')
+        self.assertFalse(submitted_record['is_terminal'])
+        self.assertFalse(submitted_record['result_ready'])
+        self.assertEqual(
+            submitted_record['request'],
+            {'video_ref': {'type': 'local_file', 'path': '/videos/test.mp4'}},
+        )
+        self.assertIsNone(submitted_record['result'])
+        self.assertEqual(running_record['status'], 'running')
+        self.assertEqual(running_record['created_at'], submitted_record['created_at'])
+        self.assertEqual(completed_record['status'], 'done')
+        self.assertTrue(completed_record['is_terminal'])
+        self.assertTrue(completed_record['result_ready'])
+        self.assertEqual(
+            completed_record['result'],
+            {'result_count': 1, 'results': backend_results},
+        )
+        self.assertEqual(completed_record['created_at'], submitted_record['created_at'])
+
 
 if __name__ == '__main__':
     unittest.main()

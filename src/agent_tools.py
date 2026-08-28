@@ -1523,6 +1523,7 @@ def _get_video_analysis_status(
     try:
         return get_video_analysis_status(
             arguments,
+            workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
     except VideoAnalysisError as exc:
@@ -1538,6 +1539,7 @@ def _get_video_analysis_result(
     try:
         return get_video_analysis_result(
             arguments,
+            workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
     except VideoAnalysisError as exc:
@@ -1569,6 +1571,7 @@ def _get_video_processing_status(
     try:
         return get_video_processing_status(
             arguments,
+            workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
     except VideoProcessingError as exc:

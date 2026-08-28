@@ -5,7 +5,7 @@ import mimetypes
 import os
 import threading
 from contextlib import ExitStack, contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -26,6 +26,12 @@ _ANALYSIS_PROCESS_LOCK = threading.Lock()
 _PROCESSING_IDEMPOTENCY_FILE = 'video_processing_idempotency.json'
 _PROCESSING_IDEMPOTENCY_LOCK_FILE = 'video_processing_idempotency.lock'
 _PROCESSING_PROCESS_LOCK = threading.Lock()
+
+_TASKS_DIRECTORY = Path('tasks')
+_TASK_RECORD_SCHEMA_VERSION = 1
+_TASK_RECORD_LOCK_FILE = 'task_records.lock'
+_TASK_RECORD_LOCK = threading.Lock()
+_TASK_MODULES = frozenset({'analysis', 'processing', 'training'})
 
 
 class VideoAnalysisError(RuntimeError):
@@ -466,6 +472,254 @@ def _locked_registry(
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _task_record_path(
+    workspace_root: Path,
+    module: str,
+    task_id: str,
+    *,
+    error_type: type[RuntimeError],
+) -> Path:
+    if module not in _TASK_MODULES:
+        raise error_type(f'unsupported task module {module!r}')
+    if (
+        not task_id
+        or task_id in {'.', '..'}
+        or '/' in task_id
+        or '\\' in task_id
+        or Path(task_id).name != task_id
+    ):
+        raise error_type('task_id contains characters that are unsafe for task storage')
+
+    workspace = workspace_root.resolve()
+    task_directory = workspace / _TASKS_DIRECTORY / module
+    try:
+        task_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        resolved_directory = task_directory.resolve(strict=True)
+        resolved_directory.relative_to(workspace)
+    except (OSError, ValueError) as exc:
+        raise error_type(f'failed to prepare {module} task directory: {exc}') from exc
+    return resolved_directory / f'{task_id}.json'
+
+
+@contextmanager
+def _locked_task_records(
+    workspace_root: Path,
+    *,
+    error_type: type[RuntimeError],
+) -> Iterator[None]:
+    """Serialize task-record updates across threads and Harness processes."""
+    state_dir = workspace_root.resolve() / _BUSINESS_FUNCTIONS_DIRECTORY
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_path = state_dir / _TASK_RECORD_LOCK_FILE
+        with _TASK_RECORD_LOCK:
+            with lock_path.open('a+', encoding='utf-8') as lock_file:
+                try:
+                    os.chmod(lock_path, 0o600)
+                except OSError:
+                    pass
+                try:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                except ImportError:
+                    fcntl = None  # type: ignore[assignment]
+                try:
+                    yield
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        raise error_type(f'failed to lock task records: {exc}') from exc
+
+
+def _read_task_record(
+    task_path: Path,
+    *,
+    error_type: type[RuntimeError],
+) -> dict[str, Any] | None:
+    if not task_path.exists():
+        return None
+    try:
+        payload = json.loads(task_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise error_type(f'failed to read task record: {exc}') from exc
+    if not isinstance(payload, dict):
+        raise error_type('task record must be a JSON object')
+    return payload
+
+
+def _write_task_record(
+    task_path: Path,
+    record: dict[str, Any],
+    *,
+    error_type: type[RuntimeError],
+) -> None:
+    temporary_path = task_path.parent / (
+        f'.{task_path.name}.{os.getpid()}.{threading.get_ident()}.tmp'
+    )
+    try:
+        temporary_path.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+            encoding='utf-8',
+        )
+        os.chmod(temporary_path, 0o600)
+        temporary_path.replace(task_path)
+    except (OSError, TypeError, ValueError) as exc:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise error_type(f'failed to persist task record: {exc}') from exc
+
+
+def _base_task_record(
+    module: str,
+    task_id: str,
+    timestamp: str,
+) -> dict[str, Any]:
+    return {
+        'schema_version': _TASK_RECORD_SCHEMA_VERSION,
+        'task_id': task_id,
+        'module': module,
+        'scenario': None,
+        'status': None,
+        'is_terminal': False,
+        'result_ready': False,
+        'idempotency_key': None,
+        'created_at': timestamp,
+        'updated_at': timestamp,
+        'request': None,
+        'result': None,
+    }
+
+
+def _persist_task_submission(
+    workspace_root: Path,
+    module: str,
+    payload: dict[str, Any],
+    request: dict[str, Any],
+    *,
+    error_type: type[RuntimeError],
+) -> None:
+    task_id = str(payload['task_id'])
+    with _locked_task_records(workspace_root, error_type=error_type):
+        task_path = _task_record_path(
+            workspace_root,
+            module,
+            task_id,
+            error_type=error_type,
+        )
+        existing = _read_task_record(task_path, error_type=error_type)
+        timestamp = _utc_timestamp()
+        record = (
+            dict(existing)
+            if existing is not None
+            else _base_task_record(module, task_id, timestamp)
+        )
+        existing_key = record.get('idempotency_key')
+        request_key = payload['idempotency_key']
+        if existing_key not in {None, request_key}:
+            raise error_type(
+                f'task_id {task_id!r} is already associated with another request'
+            )
+
+        record.update(
+            {
+                'schema_version': _TASK_RECORD_SCHEMA_VERSION,
+                'task_id': task_id,
+                'module': module,
+                'scenario': payload['scenario'],
+                'idempotency_key': request_key,
+                'updated_at': timestamp,
+                'request': request,
+                'last_submission_replayed': bool(
+                    payload.get('idempotency_replayed', False)
+                ),
+            }
+        )
+        if existing is None or not isinstance(record.get('status'), str):
+            record['status'] = payload['status']
+            record['is_terminal'] = False
+            record['result_ready'] = False
+        _write_task_record(task_path, record, error_type=error_type)
+
+
+def _persist_task_status(
+    workspace_root: Path,
+    module: str,
+    payload: dict[str, Any],
+    *,
+    error_type: type[RuntimeError],
+) -> None:
+    task_id = str(payload['task_id'])
+    with _locked_task_records(workspace_root, error_type=error_type):
+        task_path = _task_record_path(
+            workspace_root,
+            module,
+            task_id,
+            error_type=error_type,
+        )
+        timestamp = _utc_timestamp()
+        record = _read_task_record(task_path, error_type=error_type)
+        if record is None:
+            record = _base_task_record(module, task_id, timestamp)
+        record.update(
+            {
+                'schema_version': _TASK_RECORD_SCHEMA_VERSION,
+                'task_id': task_id,
+                'module': module,
+                'status': payload['status'],
+                'is_terminal': payload['is_terminal'],
+                'result_ready': payload['result_ready'],
+                'updated_at': timestamp,
+            }
+        )
+        _write_task_record(task_path, record, error_type=error_type)
+
+
+def _persist_task_result(
+    workspace_root: Path,
+    module: str,
+    payload: dict[str, Any],
+    *,
+    error_type: type[RuntimeError],
+) -> None:
+    task_id = str(payload['task_id'])
+    with _locked_task_records(workspace_root, error_type=error_type):
+        task_path = _task_record_path(
+            workspace_root,
+            module,
+            task_id,
+            error_type=error_type,
+        )
+        timestamp = _utc_timestamp()
+        record = _read_task_record(task_path, error_type=error_type)
+        if record is None:
+            record = _base_task_record(module, task_id, timestamp)
+        record.update(
+            {
+                'schema_version': _TASK_RECORD_SCHEMA_VERSION,
+                'task_id': task_id,
+                'module': module,
+                'status': payload['status'],
+                'is_terminal': True,
+                'result_ready': True,
+                'updated_at': timestamp,
+                'result': {
+                    key: value
+                    for key, value in payload.items()
+                    if key not in {'task_id', 'status'}
+                },
+            }
+        )
+        _write_task_record(task_path, record, error_type=error_type)
+
+
 def submit_video_analysis(
     arguments: dict[str, Any],
     *,
@@ -538,6 +792,13 @@ def submit_video_analysis(
             response_payload = dict(existing['response'])
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
+            _persist_task_submission(
+                workspace_root,
+                'analysis',
+                response_payload,
+                {'video_ref': dict(response_payload['video_ref'])},
+                error_type=VideoAnalysisError,
+            )
             return _render_analysis_submit_result(response_payload)
 
         if upload_path is None:
@@ -564,6 +825,13 @@ def submit_video_analysis(
         }
         _write_registry(workspace_root, registry)
 
+    _persist_task_submission(
+        workspace_root,
+        'analysis',
+        response_payload,
+        {'video_ref': dict(response_payload['video_ref'])},
+        error_type=VideoAnalysisError,
+    )
     return _render_analysis_submit_result(response_payload)
 
 
@@ -642,6 +910,13 @@ def submit_video_processing(
             response_payload = dict(existing['response'])
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
+            _persist_task_submission(
+                workspace_root,
+                'processing',
+                response_payload,
+                {'raw_video_refs': list(response_payload['raw_video_refs'])},
+                error_type=VideoProcessingError,
+            )
             return _render_processing_submit_result(response_payload)
 
         task_id = _post_uploaded_videos(endpoint, upload_paths, timeout_seconds)
@@ -665,13 +940,21 @@ def submit_video_processing(
             error_type=VideoProcessingError,
         )
 
+    _persist_task_submission(
+        workspace_root,
+        'processing',
+        response_payload,
+        {'raw_video_refs': list(response_payload['raw_video_refs'])},
+        error_type=VideoProcessingError,
+    )
     return _render_processing_submit_result(response_payload)
 
 
 def get_video_analysis_status(
     arguments: dict[str, Any],
     *,
-    timeout_seconds: float
+    workspace_root: Path,
+    timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
     """Query and normalize the current state of a video-analysis task."""
     task_id = _require_string(arguments, 'task_id')
@@ -691,12 +974,19 @@ def get_video_analysis_status(
         'is_terminal': status in {'done', 'failed'},
         'result_ready': status == 'done',
     }
+    _persist_task_status(
+        workspace_root,
+        'analysis',
+        payload,
+        error_type=VideoAnalysisError,
+    )
     return _render_status_result(payload)
 
 
 def get_video_processing_status(
     arguments: dict[str, Any],
     *,
+    workspace_root: Path,
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
     """Query and normalize the current state of a video-processing task."""
@@ -729,6 +1019,12 @@ def get_video_processing_status(
         'is_terminal': status in {'done', 'failed'},
         'result_ready': status == 'done',
     }
+    _persist_task_status(
+        workspace_root,
+        'processing',
+        payload,
+        error_type=VideoProcessingError,
+    )
     return _render_status_result(
         payload,
         action='get_video_processing_status',
@@ -738,6 +1034,7 @@ def get_video_processing_status(
 def get_video_analysis_result(
     arguments: dict[str, Any],
     *,
+    workspace_root: Path,
     timeout_seconds: float,
     base_url: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
@@ -754,6 +1051,12 @@ def get_video_analysis_result(
         'result_count': len(results),
         'results': results,
     }
+    _persist_task_result(
+        workspace_root,
+        'analysis',
+        payload,
+        error_type=VideoAnalysisError,
+    )
     return _render_analysis_result(payload)
 
 

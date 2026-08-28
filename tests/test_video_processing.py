@@ -116,6 +116,7 @@ class VideoProcessingTests(unittest.TestCase):
             },
             get_video_processing_status: {
                 'arguments',
+                'workspace_root',
                 'timeout_seconds',
             },
             get_video_processing_result: {
@@ -385,6 +386,56 @@ class VideoProcessingTests(unittest.TestCase):
             result.metadata,
             {'error_kind': 'tool_execution_error'},
         )
+
+    def test_persists_processing_task_from_submit_through_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'first.mp4').write_bytes(b'first video')
+            arguments = {
+                'scenario': 'fire_inspection',
+                'raw_video_refs': ['first.mp4'],
+                'idempotency_key': 'processing-batch-001',
+            }
+            with (
+                patch.dict(
+                    os.environ,
+                    {'VIDEO_PROCESSING_API': 'processing.test:8000'},
+                ),
+                patch('src.video_analysis.httpx.Client', _FakeClient),
+            ):
+                submitted = self._execute(workspace, arguments)
+                task_path = (
+                    workspace
+                    / 'tasks'
+                    / 'processing'
+                    / 'processing-task-123.json'
+                )
+                submitted_record = json.loads(task_path.read_text(encoding='utf-8'))
+
+                _FakeClient.backend_status = 'done'
+                status = self._execute(
+                    workspace,
+                    {'task_id': 'processing-task-123'},
+                    'get_video_processing_status',
+                )
+                completed_record = json.loads(task_path.read_text(encoding='utf-8'))
+
+        self.assertTrue(submitted.ok)
+        self.assertTrue(status.ok)
+        self.assertEqual(submitted_record['schema_version'], 1)
+        self.assertEqual(submitted_record['task_id'], 'processing-task-123')
+        self.assertEqual(submitted_record['module'], 'processing')
+        self.assertEqual(submitted_record['scenario'], 'fire_inspection')
+        self.assertEqual(submitted_record['status'], 'pending')
+        self.assertEqual(
+            submitted_record['request'],
+            {'raw_video_refs': ['first.mp4']},
+        )
+        self.assertEqual(completed_record['status'], 'done')
+        self.assertTrue(completed_record['is_terminal'])
+        self.assertTrue(completed_record['result_ready'])
+        self.assertIsNone(completed_record['result'])
+        self.assertEqual(completed_record['created_at'], submitted_record['created_at'])
 
 
 if __name__ == '__main__':
