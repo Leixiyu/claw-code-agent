@@ -12,7 +12,7 @@ import httpx
 
 from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent_types import AgentRuntimeConfig
-from src.video_analysis import (
+from src.business_functions import (
     get_video_processing_result,
     get_video_processing_status,
     submit_video_processing,
@@ -173,7 +173,7 @@ class VideoProcessingTests(unittest.TestCase):
                     os.environ,
                     {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                 ),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
 
@@ -215,7 +215,7 @@ class VideoProcessingTests(unittest.TestCase):
                     os.environ,
                     {'VIDEO_PROCESSING_API': 'http://processing.test:8000'},
                 ),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 first = self._execute(workspace, arguments)
                 second = self._execute(workspace, arguments)
@@ -273,7 +273,7 @@ class VideoProcessingTests(unittest.TestCase):
                             os.environ,
                             {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                         ),
-                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                        patch('src.business_functions.httpx.Client', _FakeClient),
                     ):
                         result = self._execute(
                             workspace,
@@ -303,7 +303,7 @@ class VideoProcessingTests(unittest.TestCase):
                             os.environ,
                             {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                         ),
-                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                        patch('src.business_functions.httpx.Client', _FakeClient),
                     ):
                         result = self._execute(
                             Path(tmp_dir),
@@ -341,7 +341,7 @@ class VideoProcessingTests(unittest.TestCase):
                     os.environ,
                     {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                 ),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
                     Path(tmp_dir),
@@ -383,7 +383,7 @@ class VideoProcessingTests(unittest.TestCase):
                     os.environ,
                     {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                 ),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 submitted = self._execute(
                     workspace,
@@ -393,7 +393,13 @@ class VideoProcessingTests(unittest.TestCase):
                         'idempotency_key': 'processing-batch-001',
                     },
                 )
-                _FakeClient.response_payload = manifest
+                _FakeClient.response_payload = {
+                    'task_id': 'processing-task-123',
+                    'status': 'done',
+                    'dataset_id': 'fireinspect-01',
+                    'manifest_path': 'datasets/fireinspect-01.json',
+                    'manifest': manifest,
+                }
                 result = self._execute(
                     workspace,
                     {'task_id': 'processing-task-123'},
@@ -438,7 +444,13 @@ class VideoProcessingTests(unittest.TestCase):
         )
 
     def test_processing_result_rejects_invalid_backend_manifests(self) -> None:
-        invalid_payloads = ([], {}, {'dataset_id': ''})
+        invalid_payloads = (
+            [],
+            {},
+            {'manifest': []},
+            {'manifest': {}},
+            {'manifest': {'dataset_id': ''}},
+        )
         for backend_payload in invalid_payloads:
             with self.subTest(backend_payload=backend_payload):
                 _FakeClient.response_payload = backend_payload
@@ -448,7 +460,7 @@ class VideoProcessingTests(unittest.TestCase):
                             os.environ,
                             {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                         ),
-                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                        patch('src.business_functions.httpx.Client', _FakeClient),
                     ):
                         result = self._execute(
                             Path(tmp_dir),
@@ -459,7 +471,9 @@ class VideoProcessingTests(unittest.TestCase):
                 self.assertFalse(result.ok)
 
     def test_processing_result_rejects_unsafe_dataset_id(self) -> None:
-        _FakeClient.response_payload = {'dataset_id': '../outside'}
+        _FakeClient.response_payload = {
+            'manifest': {'dataset_id': '../outside'},
+        }
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with (
@@ -467,7 +481,7 @@ class VideoProcessingTests(unittest.TestCase):
                     os.environ,
                     {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                 ),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
                     workspace,
@@ -488,7 +502,7 @@ class VideoProcessingTests(unittest.TestCase):
                     os.environ,
                     {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                 ),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
                     Path(tmp_dir),
@@ -513,7 +527,7 @@ class VideoProcessingTests(unittest.TestCase):
                     os.environ,
                     {'VIDEO_PROCESSING_API': 'processing.test:8000'},
                 ),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 submitted = self._execute(workspace, arguments)
                 task_path = (

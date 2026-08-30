@@ -1501,7 +1501,7 @@ def _submit_video_analysis(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_analysis import VideoAnalysisError, submit_video_analysis
+    from .business_functions import VideoAnalysisError, submit_video_analysis
 
     try:
         return submit_video_analysis(
@@ -1517,7 +1517,7 @@ def _get_video_analysis_status(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_analysis import VideoAnalysisError, get_video_analysis_status
+    from .business_functions import VideoAnalysisError, get_video_analysis_status
 
     try:
         return get_video_analysis_status(
@@ -1533,7 +1533,7 @@ def _get_video_analysis_result(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_analysis import VideoAnalysisError, get_video_analysis_result
+    from .business_functions import VideoAnalysisError, get_video_analysis_result
 
     try:
         return get_video_analysis_result(
@@ -1549,7 +1549,7 @@ def _submit_video_processing(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_analysis import VideoProcessingError, submit_video_processing
+    from .business_functions import VideoProcessingError, submit_video_processing
 
     try:
         return submit_video_processing(
@@ -1565,7 +1565,7 @@ def _get_video_processing_status(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_analysis import VideoProcessingError, get_video_processing_status
+    from .business_functions import VideoProcessingError, get_video_processing_status
 
     try:
         return get_video_processing_status(
@@ -1581,7 +1581,7 @@ def _get_video_processing_result(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .video_analysis import VideoProcessingError, get_video_processing_result
+    from .business_functions import VideoProcessingError, get_video_processing_result
 
     try:
         return get_video_processing_result(

@@ -1,3 +1,5 @@
+"""Business-facing Video Analysis and Video Processing Functions."""
+
 from __future__ import annotations
 
 import json
@@ -364,12 +366,17 @@ def _get_processing_backend_manifest(
         raise VideoProcessingError(
             'video processing result API response must be a JSON object'
         )
-    dataset_id = payload.get('dataset_id')
+    manifest = payload.get('manifest')
+    if not isinstance(manifest, dict):
+        raise VideoProcessingError(
+            'video processing result API response is missing manifest'
+        )
+    dataset_id = manifest.get('dataset_id')
     if not isinstance(dataset_id, str) or not dataset_id:
         raise VideoProcessingError(
-            'video processing result API response is missing dataset_id'
+            'video processing result API manifest is missing dataset_id'
         )
-    return payload
+    return manifest
 
 
 def _read_registry(

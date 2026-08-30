@@ -149,7 +149,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
                     Path(tmp_dir),
@@ -180,7 +180,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                             os.environ,
                             {'VIDEO_ANALYSIS_API': 'video.test:8000'},
                         ),
-                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                        patch('src.business_functions.httpx.Client', _FakeClient),
                     ):
                         result = self._execute(
                             Path(tmp_dir),
@@ -196,7 +196,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
                     Path(tmp_dir),
@@ -218,7 +218,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                             os.environ,
                             {'VIDEO_ANALYSIS_API': 'video.test:8000'},
                         ),
-                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                        patch('src.business_functions.httpx.Client', _FakeClient),
                     ):
                         result = self._execute(
                             Path(tmp_dir),
@@ -246,7 +246,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
                             os.environ,
                             {'VIDEO_ANALYSIS_API': 'video.test:8000'},
                         ),
-                        patch('src.video_analysis.httpx.Client', _FakeClient),
+                        patch('src.business_functions.httpx.Client', _FakeClient),
                     ):
                         result = self._execute(
                             Path(tmp_dir),
@@ -272,7 +272,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
                     Path(tmp_dir),
@@ -293,7 +293,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
             }
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
 
@@ -320,7 +320,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
             }
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
 
@@ -362,7 +362,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
             }
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'http://video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 first = self._execute(workspace, arguments)
                 second = self._execute(workspace, arguments)
@@ -389,7 +389,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
             }
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(workspace, arguments)
 
@@ -409,7 +409,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
             self.assertFalse(Path(video_system_path).exists())
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'http://video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 result = self._execute(
                     Path(workspace_dir),
@@ -498,7 +498,7 @@ class VideoAnalysisUnitTests(unittest.TestCase):
             }
             with (
                 patch.dict(os.environ, {'VIDEO_ANALYSIS_API': 'video.test:8000'}),
-                patch('src.video_analysis.httpx.Client', _FakeClient),
+                patch('src.business_functions.httpx.Client', _FakeClient),
             ):
                 submitted = self._execute(workspace, arguments)
                 task_path = workspace / 'tasks' / 'analysis' / 'task-123.json'
