@@ -260,17 +260,20 @@ For a video-processing request:
 
 For a training request:
 
-1. identify the scenario and use only a `dataset_id` and authorized
-   dataset-manifest path returned by a completed processing task;
-2. verify that training is allowed for the user, project, and scenario;
-3. obtain required confirmation or workflow approval before incurring a
+1. identify the scenario and use only the opaque `dataset_id` returned by a
+   completed processing task as `dataset_ref`;
+2. confirm that the corresponding authorized Workspace dataset manifest reports
+   the same `dataset_id`, the same scenario, and `status="ready"`; the submit
+   Function performs this validation again before contacting the Business API;
+3. verify that training is allowed for the user, project, and scenario;
+4. obtain required confirmation or workflow approval before incurring a
    high-cost operation;
-4. submit the training task once and preserve its `task_id`;
-5. monitor it through the authoritative training-status capability;
-6. retrieve the result only after the authoritative terminal-success state;
-7. preserve the returned `model_id` and authorized model-metadata path for
+5. submit the training task once and preserve its `task_id`;
+6. monitor it through the authoritative training-status capability;
+7. retrieve the result only after the authoritative terminal-success state;
+8. preserve the returned `model_id` and authorized model-metadata path for
    internal Agent orchestration;
-8. report training completion without revealing `dataset_id`, the
+9. report training completion without revealing `dataset_id`, the
    dataset-manifest path, `model_id`, model-metadata path, model versions, or
    model storage details
    to the user.

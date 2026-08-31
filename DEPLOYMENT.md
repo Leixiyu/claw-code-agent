@@ -14,8 +14,8 @@
 
 当前 Harness 是 Agent runtime 和本地管理 GUI。Video Analysis 和 Video
 Processing 的 submit/status/result 六个 Functions 已实现 HTTP POC，Model
-Training Status/Result 也已接入；Training Submit、Scenario Registry、Webhook、
-生产级任务数据库和多租户授权仍待开发。
+Training submit/status/result 也已接入；Scenario Registry、Webhook、生产级
+任务数据库和多租户授权仍待开发。
 
 ## 1. 部署前检查
 
@@ -264,15 +264,18 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest \
 然后在测试 Backend 或 SSH tunnel 可用时，使用已知视频分别完成一次
 Video Analysis 和 Video Processing 的 submit/status/result 闭环。验收时检查：
 
-- Agent 可见九个业务 Functions；Analysis/Processing 六个 Functions 可完成
-  submit/status/result，Training Status/Result 可完成 HTTP 查询。
+- Agent 可见九个业务 Functions，三个模块都可完成
+  submit/status/result HTTP POC。
 - submit 后生成 `workspace/tasks/<module>/<task_id>.json`。
 - status 调用会更新对应 Task JSON。
 - Processing result 完成后生成 `workspace/datasets/<dataset_id>.json`，函数只
   返回 Agent 可见的 `manifest_path`，不泄露 Backend 物理路径。
-- Model Training Status 可验证 `GET /status/{task_id}`；Result 可验证
+- Model Training Submit 会先校验
+  `workspace/datasets/<dataset_ref>.json` 存在、身份与 scenario 匹配且
+  `status="ready"`，再验证 `POST /train` 纯 JSON 请求；Status 可验证
+  `GET /status/{task_id}`；Result 可验证
   `GET /result/{task_id}`、`workspace/models/<model_id>.json` 和
-  `workspace/tasks/training/<task_id>.json`。Submit 仍不纳入真实业务验收。
+  `workspace/tasks/training/<task_id>.json`。
 
 ## 7. 创建 systemd 服务
 
@@ -464,12 +467,11 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - Video Processing 的 submit/status/result 三个 Functions。
 - Analysis/Processing Task JSON 在 Agent Workspace 中的创建和更新。
 - Processing result 对 public dataset manifest 的保存和 Agent 可见引用。
-- Model Training Status/Result 的 HTTP 查询、Training Task JSON 更新与
-  public model metadata 保存。
+- Model Training submit/status/result HTTP POC、submit 前 ready dataset manifest
+  校验、Training Task JSON 更新与 public model metadata 保存。
 
 部署成功不表示以下能力已完成：
 
-- Model Training 的 submit 真实实现。
 - Scenario Registry 和 scenario 版本管理。
 - 完整的对象存储生命周期、模型部署和回滚。
 - 生产级权威任务数据库、Webhook 和可靠轮询。
@@ -498,13 +500,13 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
       业务 Functions 实现的授权持久化。
 - [ ] systemd 服务可以自动启动和失败重启。
 - [ ] `/api/state` 健康检查通过。
-- [ ] 九个业务 Functions 可见；Analysis/Processing 已完成至少一次
+- [ ] 九个业务 Functions 可见，三个模块均已完成至少一次
       可控的 submit/status/result 验收。
 - [ ] Task JSON 会创建并更新，Processing result 会保存 public
       dataset manifest。
-- [ ] Model Training Status/Result 可查询，会更新 Training Task JSON 并
-      保存 public model metadata。
-- [ ] 已明确 Model Training Submit 仍是占位实现，不对用户宣称可用。
+- [ ] Model Training Submit 会先校验 ready dataset manifest，然后只发送
+      逻辑 JSON 引用；Status/Result 可查询，会更新 Training Task JSON
+      并保存 public model metadata。
 - [ ] Journal 日志中没有 API Key。
 - [ ] Agent session 中没有 API Key。
 - [ ] 已记录当前部署 commit。

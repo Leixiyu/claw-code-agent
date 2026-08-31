@@ -29,6 +29,9 @@ _ANALYSIS_PROCESS_LOCK = threading.Lock()
 _PROCESSING_IDEMPOTENCY_FILE = 'video_processing_idempotency.json'
 _PROCESSING_IDEMPOTENCY_LOCK_FILE = 'video_processing_idempotency.lock'
 _PROCESSING_PROCESS_LOCK = threading.Lock()
+_TRAINING_IDEMPOTENCY_FILE = 'model_training_idempotency.json'
+_TRAINING_IDEMPOTENCY_LOCK_FILE = 'model_training_idempotency.lock'
+_TRAINING_PROCESS_LOCK = threading.Lock()
 
 _TASKS_DIRECTORY = Path('tasks')
 _DATASETS_DIRECTORY = Path('datasets')
@@ -103,6 +106,17 @@ def _processing_endpoint(base_url: str) -> str:
     if '://' not in normalized:
         normalized = f'http://{normalized}'
     return f'{normalized}/process'
+
+
+def _training_endpoint(base_url: str) -> str:
+    normalized = base_url.strip().rstrip('/')
+    if not normalized:
+        raise ModelTrainingError(
+            f'{MODEL_TRAINING_API_ENV} is required to submit model training'
+        )
+    if '://' not in normalized:
+        normalized = f'http://{normalized}'
+    return f'{normalized}/train'
 
 
 def _status_endpoint(
@@ -278,6 +292,32 @@ def _post_uploaded_videos(
         response,
         operation='video processing',
         error_type=VideoProcessingError,
+    )
+
+
+def _post_model_training(
+    endpoint: str,
+    request_payload: dict[str, str],
+    timeout_seconds: float,
+) -> str:
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(endpoint, json=request_payload)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise ModelTrainingError(
+            f'model training API returned HTTP {status_code}'
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise ModelTrainingError(
+            f'failed to call model training API: {exc}'
+        ) from exc
+
+    return _task_id_from_response(
+        response,
+        operation='model training',
+        error_type=ModelTrainingError,
     )
 
 
@@ -502,6 +542,22 @@ def _render_processing_submit_result(
         json.dumps(payload, ensure_ascii=False, indent=2),
         {
             'action': 'submit_video_processing',
+            'task_id': payload['task_id'],
+            'status': payload['status'],
+            'scenario': payload['scenario'],
+            'idempotency_key': payload['idempotency_key'],
+            'idempotency_replayed': payload['idempotency_replayed'],
+        },
+    )
+
+
+def _render_training_submit_result(
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        {
+            'action': 'submit_model_training',
             'task_id': payload['task_id'],
             'status': payload['status'],
             'scenario': payload['scenario'],
@@ -972,6 +1028,79 @@ def _persist_dataset_manifest(
     return manifest_path.relative_to(workspace_root.resolve()).as_posix()
 
 
+def _validate_ready_dataset_manifest(
+    workspace_root: Path,
+    dataset_ref: str,
+    scenario: str,
+) -> None:
+    """Validate the Harness-owned dataset manifest before training submission."""
+    if (
+        len(dataset_ref) > 240
+        or dataset_ref in {'.', '..'}
+        or dataset_ref.startswith('.')
+        or any(
+            not character.isascii()
+            or (not character.isalnum() and character not in {'-', '_', '.'})
+            for character in dataset_ref
+        )
+        or '/' in dataset_ref
+        or '\\' in dataset_ref
+        or Path(dataset_ref).name != dataset_ref
+    ):
+        raise ModelTrainingError(
+            'dataset_ref contains characters that are unsafe for manifest lookup'
+        )
+
+    workspace = workspace_root.resolve()
+    manifest_path = workspace / _DATASETS_DIRECTORY / f'{dataset_ref}.json'
+    if manifest_path.is_symlink():
+        raise ModelTrainingError('dataset manifest must not be a symbolic link')
+
+    try:
+        resolved_manifest = manifest_path.resolve(strict=True)
+        resolved_manifest.relative_to(workspace / _DATASETS_DIRECTORY)
+        if not resolved_manifest.is_file():
+            raise ModelTrainingError(
+                f'dataset manifest is not a regular file for dataset_ref {dataset_ref!r}'
+            )
+        manifest = json.loads(resolved_manifest.read_text(encoding='utf-8'))
+    except FileNotFoundError as exc:
+        raise ModelTrainingError(
+            f'dataset manifest was not found for dataset_ref {dataset_ref!r}'
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ModelTrainingError(
+            f'dataset manifest contains invalid JSON for dataset_ref {dataset_ref!r}'
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise ModelTrainingError(
+            f'failed to read dataset manifest for dataset_ref {dataset_ref!r}: {exc}'
+        ) from exc
+
+    if not isinstance(manifest, dict):
+        raise ModelTrainingError(
+            f'dataset manifest must be a JSON object for dataset_ref {dataset_ref!r}'
+        )
+    manifest_dataset_id = manifest.get('dataset_id')
+    if manifest_dataset_id != dataset_ref:
+        raise ModelTrainingError(
+            'dataset manifest dataset_id does not match '
+            f'dataset_ref {dataset_ref!r}'
+        )
+    manifest_scenario = manifest.get('scenario')
+    if manifest_scenario != scenario:
+        raise ModelTrainingError(
+            'dataset manifest scenario does not match '
+            f'training scenario {scenario!r}'
+        )
+    manifest_status = manifest.get('status')
+    if manifest_status != 'ready':
+        raise ModelTrainingError(
+            f'dataset {dataset_ref!r} is not ready '
+            f'(manifest status: {manifest_status!r})'
+        )
+
+
 def _model_metadata_path(workspace_root: Path, model_id: str) -> Path:
     if (
         len(model_id) > 240
@@ -1269,10 +1398,109 @@ def submit_video_processing(
 def submit_model_training(
     arguments: dict[str, Any],
     *,
+    workspace_root: Path,
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
     """Submit model training using a processed dataset reference."""
-    raise ModelTrainingError('submit_model_training is registered but not implemented')
+    scenario = _require_string(
+        arguments,
+        'scenario',
+        error_type=ModelTrainingError,
+    )
+    if scenario not in SUPPORTED_SCENARIOS:
+        raise ModelTrainingError(
+            f'unsupported scenario {scenario!r}; supported scenarios: '
+            f'{", ".join(sorted(SUPPORTED_SCENARIOS))}'
+        )
+    dataset_ref = _require_string(
+        arguments,
+        'dataset_ref',
+        error_type=ModelTrainingError,
+    )
+    idempotency_key = _require_string(
+        arguments,
+        'idempotency_key',
+        error_type=ModelTrainingError,
+    )
+    _validate_ready_dataset_manifest(
+        workspace_root,
+        dataset_ref,
+        scenario,
+    )
+    endpoint = _training_endpoint(
+        os.environ.get(MODEL_TRAINING_API_ENV, '')
+    )
+    request_payload = {
+        'scenario': scenario,
+        'dataset_ref': dataset_ref,
+        'idempotency_key': idempotency_key,
+    }
+    request_fingerprint = {
+        'scenario': scenario,
+        'dataset_ref': dataset_ref,
+    }
+
+    with _locked_registry(
+        workspace_root,
+        registry_file=_TRAINING_IDEMPOTENCY_FILE,
+        lock_filename=_TRAINING_IDEMPOTENCY_LOCK_FILE,
+        process_lock=_TRAINING_PROCESS_LOCK,
+        operation='model-training',
+        error_type=ModelTrainingError,
+    ) as registry:
+        entries = registry.setdefault('entries', {})
+        existing = entries.get(idempotency_key)
+        if existing is not None:
+            if existing.get('request') != request_fingerprint:
+                raise ModelTrainingError(
+                    'idempotency_key has already been used for a different '
+                    'model-training request'
+                )
+            response_payload = dict(existing['response'])
+            response_payload['status'] = 'pending'
+            response_payload['idempotency_replayed'] = True
+            _persist_task_submission(
+                workspace_root,
+                'training',
+                response_payload,
+                {'dataset_ref': response_payload['dataset_ref']},
+                error_type=ModelTrainingError,
+            )
+            return _render_training_submit_result(response_payload)
+
+        task_id = _post_model_training(
+            endpoint,
+            request_payload,
+            timeout_seconds,
+        )
+        response_payload = {
+            'task_id': task_id,
+            'status': 'pending',
+            'scenario': scenario,
+            'dataset_ref': dataset_ref,
+            'idempotency_key': idempotency_key,
+            'idempotency_replayed': False,
+        }
+        entries[idempotency_key] = {
+            'request': request_fingerprint,
+            'response': response_payload,
+        }
+        _write_registry(
+            workspace_root,
+            registry,
+            registry_file=_TRAINING_IDEMPOTENCY_FILE,
+            operation='model-training',
+            error_type=ModelTrainingError,
+        )
+
+    _persist_task_submission(
+        workspace_root,
+        'training',
+        response_payload,
+        {'dataset_ref': response_payload['dataset_ref']},
+        error_type=ModelTrainingError,
+    )
+    return _render_training_submit_result(response_payload)
 
 
 def get_video_analysis_status(

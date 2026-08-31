@@ -3,9 +3,8 @@
 > 本文档是 Harness 接入视频业务的阶段性记录，初始快照日期为
 > **2026-07-25**，最近更新日期为 **2026-08-31**。
 >
-> 当前代码状态：Video Analysis 和 Video Processing 的 3 个 Functions
-> 均已实现 HTTP POC；
-> Model Training Status 和 Result 已实现 HTTP POC；Submit 仍为安全占位。
+> 当前代码状态：Video Analysis、Video Processing 和 Model Training 的
+> submit/status/result 九个 Functions 均已实现 HTTP POC。
 
 ## 1. 目标业务
 
@@ -48,9 +47,8 @@ Business Backend APIs
 Business-owned datasets / models / results
 ```
 
-Analysis、Processing、当前 Training Status/Result 以及未来 Training Submit
-的 HTTP 请求都由 Harness Function 执行。Business API 地址来自
-Harness 的受信任配置，不从用户输入或 LLM arguments 获取。
+Analysis、Processing 和 Training 的 HTTP 请求都由 Harness Function 执行。
+Business API 地址来自 Harness 的受信任配置，不从用户输入或 LLM arguments 获取。
 
 ## 3. 不同角色的信息视图
 
@@ -116,17 +114,9 @@ Function 读取并通过 multipart HTTP 上传；视频二进制内容不进入 
 | Processing | `submit_video_processing` | 已注册 | 已实现 | HTTP POC |
 | Processing | `get_video_processing_status` | 已注册 | 已实现 | HTTP POC |
 | Processing | `get_video_processing_result` | 已注册 | 已实现 | HTTP POC |
-| Training | `submit_model_training` | 已注册 | 已创建 | 未连接 |
+| Training | `submit_model_training` | 已注册 | 已实现 | HTTP POC |
 | Training | `get_model_training_status` | 已注册 | 已实现 | HTTP POC |
 | Training | `get_model_training_result` | 已注册 | 已实现 | HTTP POC |
-
-当前 Model Training 的 Submit 占位 Function 被调用时会返回受控错误：
-
-```text
-<function_name> is registered but not implemented
-```
-
-因此“Tool Schema 已注册”不等于“业务能力已可用”。
 
 ## 6. 当前 Tool Contract
 
@@ -171,7 +161,17 @@ get_model_training_status(task_id)
 get_model_training_result(task_id)
 ```
 
-- `dataset_ref` 必须来自已完成的 Processing 结果，不是文件系统路径。
+- `dataset_ref` 必须是已完成 Processing 结果返回的 `dataset_id`，
+  不是文件系统路径。Harness 在 submit 前读取
+  `AGENT_WORKSPACE/datasets/<dataset_ref>.json`，并校验 JSON 结构、
+  `dataset_id`、`scenario` 以及 `status="ready"`。
+- `submit_model_training` 向 `POST /train` 发送 `scenario`、`dataset_ref`
+  和 `idempotency_key` JSON，不上传 dataset 或 base model 文件。
+- Harness 本地 manifest 校验失败时不调用 Business API，也不创建
+  Training Task；Business Backend 仍必须在 `/train` 内做最终的 dataset
+  存在性和 ready-state 校验，防止状态竞争。
+- `submit` 返回 `task_id`、`status="pending"`、`scenario`、`dataset_ref`、
+  `idempotency_key` 和 `idempotency_replayed`。
 - `get_model_training_result` 返回 `task_id`、`status="done"`、`model_id`
   和 Harness 授权的相对 `metadata_path`，不返回 model artifact 路径。
 - Business `/result/{task_id}` 响应包含 public `metadata` JSON object；
@@ -200,10 +200,9 @@ tests/
 - `test_video_analysis_unit.py` 验证已实现的 Analysis Functions。
 - `test_video_processing.py` 验证 Processing submit/status/result HTTP POC、
   manifest 持久化和 Tool Schema。
-- `test_model_training.py` 验证 Training 函数签名、Tool Schema、Status/Result
-  HTTP 调用、Task JSON 和 model metadata 持久化，以及 Submit 受控
-  未实现错误。
-- 当前三个业务单元测试文件共 51 个相关测试通过。
+- `test_model_training.py` 验证 Training 函数签名、Tool Schema、submit/status/result
+  HTTP 调用、幂等、Task JSON 和 model metadata 持久化。
+- 当前三个业务单元测试文件共 58 个相关测试通过。
 
 ## 8. 当前限制
 
@@ -212,7 +211,8 @@ tests/
   Task JSON POC。
 - Analysis Tool Contract 仍支持 Business 服务器路径和 COS 路径；Processing
   当前只支持 Harness 服务器上的上传文件。
-- Model Training 目前已实现 Status/Result HTTP POC；Submit 仍未实现。
+- Model Training 目前已实现 submit/status/result HTTP POC，submit 会在
+  调用 Backend 前校验 Harness 保存的 ready dataset manifest。
 - Harness 负责通过 HTTP 上传 raw video；应继续验证大文件超时、流式传输、
   文件大小限制和失败重试，不应将视频 Base64 放入 LLM Tool Arguments。
 - 当前只有 `fire_inspection` 一个 scenario，尚无正式 Scenario Registry。
@@ -230,7 +230,7 @@ tests/
 | `AGENT_WORKSPACE` | 已接入 | Harness 的受控 Agent Workspace |
 | `VIDEO_ANALYSIS_API` | 已接入 | Video Analysis HTTP API |
 | `VIDEO_PROCESSING_API` | 已接入 | Video Processing HTTP API |
-| `MODEL_TRAINING_API` | 已接入 | Model Training Status/Result HTTP API |
+| `MODEL_TRAINING_API` | 已接入 | Model Training submit/status/result HTTP API |
 
 `BUSINESS_API_*`、`TASK_API_*`、`VIDEO_OUTPUT_DIR` 和 `TASK_LOG_DIR` 等早期预留
 变量尚未接入当前代码。Harness 可持有调用 Business API 所需的最小权限
@@ -242,15 +242,6 @@ tests/
   Contract。
 - [ ] 与 Business 同事确认 Model Training 的 input、status、result 和 error
   Contract。
-- [x] 实现 `submit_video_processing` 和 `get_video_processing_status` 的
-  Harness HTTP 调用。
-- [x] 实现 `get_video_processing_result` 的 Harness HTTP 调用，并将 public
-  dataset manifest 保存到 `AGENT_WORKSPACE/datasets/{dataset_id}.json`。
-- [x] 实现 `get_model_training_status` 的 Harness HTTP 调用与 Training
-  Task JSON 更新。
-- [x] 实现 `get_model_training_result` 的 Harness HTTP 调用，并将 public
-  model metadata 保存到 `AGENT_WORKSPACE/models/{model_id}.json`。
-- [ ] 实现 `submit_model_training` 的 Harness HTTP 调用。
 - [ ] 定义 raw video 从 Harness 上传到 Business API 的大文件传输、
   超时、重试和大小限制 Contract。
 - [ ] 统一三个模块的 submit/status/result envelope，但不擅自重命名 Business
@@ -261,8 +252,7 @@ tests/
   API 映射。
 - [ ] 使用 SQLite 或 PostgreSQL 保存可恢复的业务任务引用，不依赖 LLM
   session 作为权威状态。
-- [ ] 为未实现 Functions 增加 HTTPX Mock 测试；实现后再增加
-  显式启用的真实 Business HTTP 集成测试。
+- [ ] 增加显式启用的真实 Processing/Training Business HTTP 集成测试。
 - [ ] 当 scenario 或必填参数不明确时让 Agent 请求最小必要补充，不得猜测或
   生成未注册引用。
 
@@ -282,8 +272,6 @@ tests/
   Tool 编排，不向普通用户展示。
 - [ ] 更新 Workspace 边界：Harness 只保存 raw videos 和安全逻辑引用，
   processed datasets、labels 和 model artifacts 由 Business Backend 所有。
-- [ ] 加入六个 Skeleton Functions 的精确参数，并明确当前调用只能得到
-  `registered but not implemented` 错误。
 - [ ] 在 Business Contract 确认后补充 Processing/Training 的返回字段、权威
   状态、幂等、超时、重试和轮询规则。
 - [ ] 使用 HTTPX Mock 验证场景路由、缺失参数、Tool 不可用、越权请求、

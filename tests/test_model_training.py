@@ -27,16 +27,42 @@ _MODEL_TRAINING_TOOLS = {
 }
 
 
+def _write_dataset_manifest(
+    workspace: Path,
+    *,
+    dataset_id: str = 'fire-inspect-01',
+    scenario: str = 'fire_inspection',
+    status: str = 'ready',
+) -> Path:
+    dataset_directory = workspace / 'datasets'
+    dataset_directory.mkdir(parents=True, exist_ok=True)
+    manifest_path = dataset_directory / f'{dataset_id}.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'dataset_id': dataset_id,
+                'scenario': scenario,
+                'version': 1,
+                'status': status,
+                'video_count': 1,
+            }
+        ),
+        encoding='utf-8',
+    )
+    return manifest_path
+
+
 class _FakeResponse:
     def __init__(
         self,
         payload: object,
         status_code: int = 200,
         url: str = 'http://training.test',
+        method: str = 'GET',
     ) -> None:
         self.payload = payload
         self.status_code = status_code
-        self.request = httpx.Request('GET', url)
+        self.request = httpx.Request(method, url)
 
     def json(self) -> object:
         return self.payload
@@ -57,6 +83,8 @@ class _FakeResponse:
 class _FakeClient:
     calls: list[tuple[str, dict[str, object]]] = []
     backend_status = 'running'
+    submit_payload: object = {'task_id': 'training-task-123'}
+    submit_status_code = 200
     result_payload: object = {}
     result_status_code = 200
 
@@ -79,17 +107,32 @@ class _FakeClient:
             url,
         )
 
+    def post(self, url: str, **kwargs: object) -> _FakeResponse:
+        self.calls.append((url, kwargs))
+        return _FakeResponse(
+            self.submit_payload,
+            self.submit_status_code,
+            url,
+            'POST',
+        )
+
 
 class ModelTrainingTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeClient.calls = []
         _FakeClient.backend_status = 'running'
+        _FakeClient.submit_payload = {'task_id': 'training-task-123'}
+        _FakeClient.submit_status_code = 200
         _FakeClient.result_payload = {}
         _FakeClient.result_status_code = 200
 
     def test_defines_model_training_function_signatures(self) -> None:
         expected_parameters = {
-            submit_model_training: {'arguments', 'timeout_seconds'},
+            submit_model_training: {
+                'arguments',
+                'workspace_root',
+                'timeout_seconds',
+            },
             get_model_training_status: {
                 'arguments',
                 'workspace_root',
@@ -132,29 +175,369 @@ class ModelTrainingTests(unittest.TestCase):
                 self.assertEqual(parameters['required'], ['task_id'])
                 self.assertEqual(set(parameters['properties']), {'task_id'})
 
-    def test_unimplemented_submit_returns_controlled_error(self) -> None:
+    def test_submit_sends_only_logical_json_and_persists_training_task(self) -> None:
         registry = default_tool_registry()
         with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            _write_dataset_manifest(workspace)
             context = build_tool_context(
-                AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                AgentRuntimeConfig(cwd=workspace),
                 tool_registry=registry,
             )
-            result = execute_tool(
-                registry,
-                'submit_model_training',
-                {},
-                context,
+            arguments = {
+                'scenario': 'fire_inspection',
+                'dataset_ref': 'fire-inspect-01',
+                'idempotency_key': 'training-fire-inspect-01-001',
+            }
+            with (
+                patch.dict(
+                    os.environ,
+                    {'MODEL_TRAINING_API': 'training.test:8000'},
+                ),
+                patch('src.business_functions.httpx.Client', _FakeClient),
+            ):
+                result = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    arguments,
+                    context,
+                )
+
+            task_record = json.loads(
+                (
+                    workspace
+                    / 'tasks'
+                    / 'training'
+                    / 'training-task-123.json'
+                ).read_text(encoding='utf-8')
             )
 
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            json.loads(result.content),
+            {
+                'task_id': 'training-task-123',
+                'status': 'pending',
+                'scenario': 'fire_inspection',
+                'dataset_ref': 'fire-inspect-01',
+                'idempotency_key': 'training-fire-inspect-01-001',
+                'idempotency_replayed': False,
+            },
+        )
+        self.assertEqual(
+            _FakeClient.calls,
+            [
+                (
+                    'http://training.test:8000/train',
+                    {
+                        'json': {
+                            'scenario': 'fire_inspection',
+                            'dataset_ref': 'fire-inspect-01',
+                            'idempotency_key': 'training-fire-inspect-01-001',
+                        }
+                    },
+                )
+            ],
+        )
+        self.assertEqual(task_record['module'], 'training')
+        self.assertEqual(task_record['status'], 'pending')
+        self.assertEqual(task_record['scenario'], 'fire_inspection')
+        self.assertEqual(task_record['request'], {'dataset_ref': 'fire-inspect-01'})
+        self.assertEqual(
+            task_record['idempotency_key'],
+            'training-fire-inspect-01-001',
+        )
+
+    def test_submit_replays_same_idempotency_key_without_second_request(self) -> None:
+        registry = default_tool_registry()
+        arguments = {
+            'scenario': 'fire_inspection',
+            'dataset_ref': 'fire-inspect-01',
+            'idempotency_key': 'training-fire-inspect-01-001',
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            _write_dataset_manifest(workspace)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {'MODEL_TRAINING_API': 'training.test:8000'},
+                ),
+                patch('src.business_functions.httpx.Client', _FakeClient),
+            ):
+                first = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    arguments,
+                    context,
+                )
+                second = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    arguments,
+                    context,
+                )
+
+        self.assertTrue(first.ok)
+        self.assertTrue(second.ok)
+        self.assertFalse(json.loads(first.content)['idempotency_replayed'])
+        self.assertTrue(json.loads(second.content)['idempotency_replayed'])
+        self.assertEqual(len(_FakeClient.calls), 1)
+
+    def test_submit_rejects_reused_key_for_different_dataset(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            _write_dataset_manifest(workspace)
+            _write_dataset_manifest(workspace, dataset_id='fire-inspect-02')
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {'MODEL_TRAINING_API': 'training.test:8000'},
+                ),
+                patch('src.business_functions.httpx.Client', _FakeClient),
+            ):
+                first = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    {
+                        'scenario': 'fire_inspection',
+                        'dataset_ref': 'fire-inspect-01',
+                        'idempotency_key': 'training-request-001',
+                    },
+                    context,
+                )
+                second = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    {
+                        'scenario': 'fire_inspection',
+                        'dataset_ref': 'fire-inspect-02',
+                        'idempotency_key': 'training-request-001',
+                    },
+                    context,
+                )
+
+        self.assertTrue(first.ok)
+        self.assertFalse(second.ok)
+        self.assertIn('different model-training request', second.content)
+        self.assertEqual(len(_FakeClient.calls), 1)
+
+    def test_submit_validates_arguments_and_api_configuration(self) -> None:
+        registry = default_tool_registry()
+        invalid_arguments = (
+            {},
+            {
+                'scenario': 'unknown',
+                'dataset_ref': 'fire-inspect-01',
+                'idempotency_key': 'training-request-001',
+            },
+            {
+                'scenario': 'fire_inspection',
+                'dataset_ref': '',
+                'idempotency_key': 'training-request-001',
+            },
+            {
+                'scenario': 'fire_inspection',
+                'dataset_ref': 'fire-inspect-01',
+                'idempotency_key': '',
+            },
+        )
+        for arguments in invalid_arguments:
+            with self.subTest(arguments=arguments):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    context = build_tool_context(
+                        AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                        tool_registry=registry,
+                    )
+                    result = execute_tool(
+                        registry,
+                        'submit_model_training',
+                        arguments,
+                        context,
+                    )
+                self.assertFalse(result.ok)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            _write_dataset_manifest(workspace)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                result = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    {
+                        'scenario': 'fire_inspection',
+                        'dataset_ref': 'fire-inspect-01',
+                        'idempotency_key': 'training-request-001',
+                    },
+                    context,
+                )
+
         self.assertFalse(result.ok)
-        self.assertEqual(
-            result.content,
-            'submit_model_training is registered but not implemented',
+        self.assertIn('MODEL_TRAINING_API is required', result.content)
+
+    def test_submit_reports_backend_http_errors(self) -> None:
+        _FakeClient.submit_status_code = 500
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            _write_dataset_manifest(workspace)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {'MODEL_TRAINING_API': 'training.test:8000'},
+                ),
+                patch('src.business_functions.httpx.Client', _FakeClient),
+            ):
+                result = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    {
+                        'scenario': 'fire_inspection',
+                        'dataset_ref': 'fire-inspect-01',
+                        'idempotency_key': 'training-request-001',
+                    },
+                    context,
+                )
+
+        self.assertFalse(result.ok)
+        self.assertIn('model training API returned HTTP 500', result.content)
+
+    def test_submit_rejects_missing_dataset_manifest_without_http_request(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {'MODEL_TRAINING_API': 'training.test:8000'},
+                ),
+                patch('src.business_functions.httpx.Client', _FakeClient),
+            ):
+                result = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    {
+                        'scenario': 'fire_inspection',
+                        'dataset_ref': 'missing-dataset',
+                        'idempotency_key': 'training-request-001',
+                    },
+                    context,
+                )
+
+            training_tasks_created = (workspace / 'tasks' / 'training').exists()
+
+        self.assertFalse(result.ok)
+        self.assertIn('dataset manifest was not found', result.content)
+        self.assertEqual(_FakeClient.calls, [])
+        self.assertFalse(training_tasks_created)
+
+    def test_submit_rejects_dataset_manifest_that_is_not_ready(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            _write_dataset_manifest(workspace, status='processing')
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {'MODEL_TRAINING_API': 'training.test:8000'},
+                ),
+                patch('src.business_functions.httpx.Client', _FakeClient),
+            ):
+                result = execute_tool(
+                    registry,
+                    'submit_model_training',
+                    {
+                        'scenario': 'fire_inspection',
+                        'dataset_ref': 'fire-inspect-01',
+                        'idempotency_key': 'training-request-001',
+                    },
+                    context,
+                )
+
+        self.assertFalse(result.ok)
+        self.assertIn("is not ready (manifest status: 'processing')", result.content)
+        self.assertEqual(_FakeClient.calls, [])
+
+    def test_submit_rejects_manifest_identity_or_scenario_mismatch(self) -> None:
+        cases = (
+            (
+                {
+                    'dataset_id': 'another-dataset',
+                    'scenario': 'fire_inspection',
+                    'status': 'ready',
+                },
+                'dataset_id does not match',
+            ),
+            (
+                {
+                    'dataset_id': 'fire-inspect-01',
+                    'scenario': 'another_scenario',
+                    'status': 'ready',
+                },
+                'scenario does not match',
+            ),
         )
-        self.assertEqual(
-            result.metadata,
-            {'error_kind': 'tool_execution_error'},
-        )
+        registry = default_tool_registry()
+        for manifest, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                _FakeClient.calls = []
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    workspace = Path(tmp_dir)
+                    manifest_path = _write_dataset_manifest(workspace)
+                    manifest_path.write_text(
+                        json.dumps(manifest),
+                        encoding='utf-8',
+                    )
+                    context = build_tool_context(
+                        AgentRuntimeConfig(cwd=workspace),
+                        tool_registry=registry,
+                    )
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {'MODEL_TRAINING_API': 'training.test:8000'},
+                        ),
+                        patch('src.business_functions.httpx.Client', _FakeClient),
+                    ):
+                        result = execute_tool(
+                            registry,
+                            'submit_model_training',
+                            {
+                                'scenario': 'fire_inspection',
+                                'dataset_ref': 'fire-inspect-01',
+                                'idempotency_key': 'training-request-001',
+                            },
+                            context,
+                        )
+
+                self.assertFalse(result.ok)
+                self.assertIn(expected_error, result.content)
+                self.assertEqual(_FakeClient.calls, [])
 
     def test_status_returns_backend_states_and_persists_training_task(self) -> None:
         expected_statuses = {

@@ -389,9 +389,11 @@ def default_tool_registry() -> dict[str, AgentTool]:
             name='submit_model_training',
             description=(
                 'Submit asynchronous model training using a processed dataset. dataset_ref '
-                'must come from a completed video-processing result. This contract is '
-                'registered for integration work, but its backend implementation is not '
-                'connected yet.'
+                'must identify a matching ready manifest in '
+                'AGENT_WORKSPACE/datasets/<dataset_ref>.json from a completed '
+                'video-processing result. The Business Backend owns the dataset and base '
+                'model; the Harness sends only logical JSON references and does not upload '
+                'training data or model files.'
             ),
             parameters={
                 'type': 'object',
@@ -404,8 +406,9 @@ def default_tool_registry() -> dict[str, AgentTool]:
                     'dataset_ref': {
                         'type': 'string',
                         'description': (
-                            'Opaque dataset reference from get_video_processing_result. '
-                            'It is not a backend filesystem path.'
+                            'Opaque dataset ID from get_video_processing_result. It must '
+                            'match a ready Harness dataset manifest and is not a backend '
+                            'filesystem path.'
                         ),
                     },
                     'idempotency_key': {
@@ -424,8 +427,8 @@ def default_tool_registry() -> dict[str, AgentTool]:
         AgentTool(
             name='get_model_training_status',
             description=(
-                'Query the status of a model-training task. This contract is registered '
-                'for integration work, but its backend implementation is not connected yet.'
+                'Query the authoritative status of a previously submitted model-training '
+                'task.'
             ),
             parameters={
                 'type': 'object',
@@ -1601,6 +1604,7 @@ def _submit_model_training(
     try:
         return submit_model_training(
             arguments,
+            workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
     except ModelTrainingError as exc:
