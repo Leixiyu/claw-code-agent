@@ -184,8 +184,7 @@ Backend 确认，不应根据文档自行假定。
 ```text
 src/
 ├── agent_tools.py
-├── business_functions.py
-└── model_training.py
+└── business_functions.py
 
 tests/
 ├── test_video_analysis.py

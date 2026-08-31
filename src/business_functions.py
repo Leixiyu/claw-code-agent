@@ -45,6 +45,10 @@ class VideoProcessingError(RuntimeError):
     """Raised when a video-processing operation cannot be completed."""
 
 
+class ModelTrainingError(RuntimeError):
+    """Raised when a model-training operation cannot be completed."""
+
+
 def _require_string(
     container: dict[str, Any],
     key: str,
@@ -1082,6 +1086,15 @@ def submit_video_processing(
     return _render_processing_submit_result(response_payload)
 
 
+def submit_model_training(
+    arguments: dict[str, Any],
+    *,
+    timeout_seconds: float,
+) -> tuple[str, dict[str, Any]]:
+    """Submit model training using a processed dataset reference."""
+    raise ModelTrainingError('submit_model_training is registered but not implemented')
+
+
 def get_video_analysis_status(
     arguments: dict[str, Any],
     *,
@@ -1163,6 +1176,15 @@ def get_video_processing_status(
     )
 
 
+def get_model_training_status(
+    arguments: dict[str, Any],
+    *,
+    timeout_seconds: float,
+) -> tuple[str, dict[str, Any]]:
+    """Return the authoritative status of a model-training task."""
+    raise ModelTrainingError('get_model_training_status is registered but not implemented')
+
+
 def get_video_analysis_result(
     arguments: dict[str, Any],
     *,
@@ -1227,3 +1249,12 @@ def get_video_processing_result(
         error_type=VideoProcessingError,
     )
     return _render_processing_result(payload)
+
+
+def get_model_training_result(
+    arguments: dict[str, Any],
+    *,
+    timeout_seconds: float,
+) -> tuple[str, dict[str, Any]]:
+    """Return the logical model name and public training metadata."""
+    raise ModelTrainingError('get_model_training_result is registered but not implemented')

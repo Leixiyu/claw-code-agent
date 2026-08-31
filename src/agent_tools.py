@@ -1597,7 +1597,7 @@ def _submit_model_training(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .model_training import ModelTrainingError, submit_model_training
+    from .business_functions import ModelTrainingError, submit_model_training
 
     try:
         return submit_model_training(
@@ -1612,7 +1612,7 @@ def _get_model_training_status(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .model_training import ModelTrainingError, get_model_training_status
+    from .business_functions import ModelTrainingError, get_model_training_status
 
     try:
         return get_model_training_status(
@@ -1627,7 +1627,7 @@ def _get_model_training_result(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> tuple[str, dict[str, Any]]:
-    from .model_training import ModelTrainingError, get_model_training_result
+    from .business_functions import ModelTrainingError, get_model_training_result
 
     try:
         return get_model_training_result(

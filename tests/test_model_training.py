@@ -7,7 +7,7 @@ from pathlib import Path
 
 from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent_types import AgentRuntimeConfig
-from src.model_training import (
+from src.business_functions import (
     get_model_training_result,
     get_model_training_status,
     submit_model_training,

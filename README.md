@@ -247,8 +247,7 @@ claw-code-agent/
 │   ├── main.py                   # CLI entry point & argument parsing
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
-│   ├── business_functions.py     # Analysis/Processing HTTP Functions and POC idempotency
-│   ├── model_training.py         # Model-training Function signatures and placeholders
+│   ├── business_functions.py     # Analysis/Processing HTTP Functions and Training placeholders
 │   ├── agent_prompting.py        # System prompt assembly
 │   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
 │   ├── agent_context.py          # Context building & CLAUDE.md discovery
