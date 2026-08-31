@@ -32,6 +32,7 @@ _PROCESSING_PROCESS_LOCK = threading.Lock()
 
 _TASKS_DIRECTORY = Path('tasks')
 _DATASETS_DIRECTORY = Path('datasets')
+_MODELS_DIRECTORY = Path('models')
 _TASK_RECORD_SCHEMA_VERSION = 1
 _WORKSPACE_RECORD_LOCK_FILE = 'workspace_records.lock'
 _WORKSPACE_RECORD_LOCK = threading.Lock()
@@ -384,6 +385,51 @@ def _get_processing_backend_manifest(
     return manifest
 
 
+def _get_model_training_backend_metadata(
+    endpoint: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(endpoint)
+            if response.status_code == 202:
+                raise ModelTrainingError(
+                    'model training result is not ready (HTTP 202)'
+                )
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise ModelTrainingError(
+            f'model training result API returned HTTP {status_code}'
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise ModelTrainingError(
+            f'failed to call model training result API: {exc}'
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ModelTrainingError(
+            'model training result API returned invalid JSON'
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ModelTrainingError(
+            'model training result API response must be a JSON object'
+        )
+    metadata = payload.get('metadata')
+    if not isinstance(metadata, dict):
+        raise ModelTrainingError(
+            'model training result API response is missing metadata'
+        )
+    model_id = metadata.get('model_id')
+    if not isinstance(model_id, str) or not model_id:
+        raise ModelTrainingError(
+            'model training result API metadata is missing model_id'
+        )
+    return metadata
+
+
 def _read_registry(
     workspace_root: Path,
     *,
@@ -503,6 +549,21 @@ def _render_processing_result(payload: dict[str, Any]) -> tuple[str, dict[str, A
             'status': payload['status'],
             'dataset_id': payload['dataset_id'],
             'manifest_path': payload['manifest_path'],
+        },
+    )
+
+
+def _render_training_result(
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        {
+            'action': 'get_model_training_result',
+            'task_id': payload['task_id'],
+            'status': payload['status'],
+            'model_id': payload['model_id'],
+            'metadata_path': payload['metadata_path'],
         },
     )
 
@@ -911,6 +972,70 @@ def _persist_dataset_manifest(
     return manifest_path.relative_to(workspace_root.resolve()).as_posix()
 
 
+def _model_metadata_path(workspace_root: Path, model_id: str) -> Path:
+    if (
+        len(model_id) > 240
+        or model_id in {'.', '..'}
+        or model_id.startswith('.')
+        or any(
+            not character.isascii()
+            or (not character.isalnum() and character not in {'-', '_', '.'})
+            for character in model_id
+        )
+        or '/' in model_id
+        or '\\' in model_id
+        or Path(model_id).name != model_id
+    ):
+        raise ModelTrainingError(
+            'model_id contains characters that are unsafe for metadata storage'
+        )
+
+    workspace = workspace_root.resolve()
+    model_directory = workspace / _MODELS_DIRECTORY
+    try:
+        model_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        resolved_directory = model_directory.resolve(strict=True)
+        resolved_directory.relative_to(workspace)
+    except (OSError, ValueError) as exc:
+        raise ModelTrainingError(
+            f'failed to prepare model metadata directory: {exc}'
+        ) from exc
+    return resolved_directory / f'{model_id}.json'
+
+
+def _persist_model_metadata(
+    workspace_root: Path,
+    metadata: dict[str, Any],
+) -> str:
+    model_id = str(metadata['model_id'])
+    with _locked_workspace_records(
+        workspace_root,
+        error_type=ModelTrainingError,
+    ):
+        metadata_path = _model_metadata_path(workspace_root, model_id)
+        temporary_path = metadata_path.parent / (
+            f'.{metadata_path.name}.{os.getpid()}.{threading.get_ident()}.tmp'
+        )
+        try:
+            temporary_path.write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True)
+                + '\n',
+                encoding='utf-8',
+            )
+            os.chmod(temporary_path, 0o600)
+            temporary_path.replace(metadata_path)
+        except (OSError, TypeError, ValueError) as exc:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise ModelTrainingError(
+                f'failed to persist model metadata: {exc}'
+            ) from exc
+
+    return metadata_path.relative_to(workspace_root.resolve()).as_posix()
+
+
 def submit_video_analysis(
     arguments: dict[str, Any],
     *,
@@ -1276,7 +1401,35 @@ def get_video_processing_result(
 def get_model_training_result(
     arguments: dict[str, Any],
     *,
+    workspace_root: Path,
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
-    """Return the logical model name and public training metadata."""
-    raise ModelTrainingError('get_model_training_result is registered but not implemented')
+    """Return and persist metadata for a completed model-training task."""
+    task_id = _require_string(
+        arguments,
+        'task_id',
+        error_type=ModelTrainingError,
+    )
+    endpoint = _result_endpoint(
+        os.environ.get(MODEL_TRAINING_API_ENV, ''),
+        task_id,
+        api_env=MODEL_TRAINING_API_ENV,
+        operation='model training',
+        error_type=ModelTrainingError,
+    )
+    metadata = _get_model_training_backend_metadata(endpoint, timeout_seconds)
+    model_id = str(metadata['model_id'])
+    metadata_path = _persist_model_metadata(workspace_root, metadata)
+    payload = {
+        'task_id': task_id,
+        'status': 'done',
+        'model_id': model_id,
+        'metadata_path': metadata_path,
+    }
+    _persist_task_result(
+        workspace_root,
+        'training',
+        payload,
+        error_type=ModelTrainingError,
+    )
+    return _render_training_result(payload)

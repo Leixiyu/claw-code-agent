@@ -112,7 +112,8 @@ File operation rules:
 - do not load complete video binaries into the LLM context;
 - use only the exact opaque references required by a registered business Tool,
   such as a raw-video reference, `task_id`, `dataset_id`, an authorized
-  dataset-manifest path, `model_name`, or a result reference;
+  dataset-manifest path, `model_id`, an authorized model-metadata path, or a
+  result reference;
 - treat a dataset-manifest path as an authorized Agent-visible reference, not
   as the physical location of the processed dataset;
 - do not resolve opaque references into Business Backend paths or use them to
@@ -185,7 +186,8 @@ After calling a tool:
 - validate that the response contains the identifiers and status fields
   required by its contract;
 - preserve returned `task_id`, `dataset_id`, authorized dataset-manifest path,
-  `model_name`, trace ID, and result references when present;
+  `model_id`, authorized model-metadata path, trace ID, and result references
+  when present;
 - use the dataset-manifest path only to access the authorized manifest; never
   treat it as a processed-dataset storage path;
 - distinguish an accepted submission from a completed task;
@@ -266,9 +268,11 @@ For a training request:
 4. submit the training task once and preserve its `task_id`;
 5. monitor it through the authoritative training-status capability;
 6. retrieve the result only after the authoritative terminal-success state;
-7. preserve the returned `model_name` for internal Agent orchestration;
+7. preserve the returned `model_id` and authorized model-metadata path for
+   internal Agent orchestration;
 8. report training completion without revealing `dataset_id`, the
-   dataset-manifest path, `model_name`, model versions, or model storage details
+   dataset-manifest path, `model_id`, model-metadata path, model versions, or
+   model storage details
    to the user.
 
 Model validation, deployment, traffic changes, and rollback are outside the
@@ -348,9 +352,9 @@ For completed tasks, report:
 - for video processing or model training, only the user-visible completion or
   failure state and the smallest useful next step.
 
-Keep `dataset_id`, dataset-manifest paths, `model_name`, model versions, model
-artifact locations, and other internal orchestration references out of
-user-facing responses.
+Keep `dataset_id`, dataset-manifest paths, `model_id`, model-metadata paths,
+model versions, model artifact locations, and other internal orchestration
+references out of user-facing responses.
 
 For failed or blocked tasks, report:
 

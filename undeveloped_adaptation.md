@@ -5,7 +5,7 @@
 >
 > 当前代码状态：Video Analysis 和 Video Processing 的 3 个 Functions
 > 均已实现 HTTP POC；
-> Model Training Status 已实现 HTTP POC；Submit 和 Result 仍为安全占位。
+> Model Training Status 和 Result 已实现 HTTP POC；Submit 仍为安全占位。
 
 ## 1. 目标业务
 
@@ -48,7 +48,7 @@ Business Backend APIs
 Business-owned datasets / models / results
 ```
 
-Analysis、Processing、当前 Training Status 以及未来 Training Submit/Result
+Analysis、Processing、当前 Training Status/Result 以及未来 Training Submit
 的 HTTP 请求都由 Harness Function 执行。Business API 地址来自
 Harness 的受信任配置，不从用户输入或 LLM arguments 获取。
 
@@ -74,7 +74,7 @@ Agent 可以知道：
 - 当前注册的 9 个 Function Schema 及其安全返回值；
 - Harness Workspace 中用户上传的 raw videos 或其受控引用；
 - Processing 返回的 public dataset manifest 和 `dataset_ref`；
-- Training 返回的逻辑 `model_name`。
+- Training 返回的逻辑 `model_id` 和授权 model-metadata path。
 
 Agent 不知道 Function 的内部处理流程、处理后视频和 label 的物理位置、
 model checkpoint 位置、Business 内部 API 或存储路径。
@@ -97,12 +97,12 @@ Business Backend 负责：
 | public dataset manifest / `dataset_ref` | Business 返回给 Harness | Agent 可见，用户不可见 |
 | internal dataset manifest | Video Processing Backend | 不可见 |
 | model artifacts / checkpoints | Model Training Backend | 不可见 |
-| 逻辑 `model_name` | Business 返回给 Harness | Agent 可见，用户不可见 |
+| 逻辑 `model_id` / model-metadata path | Business 返回给 Harness | Agent 可见，用户不可见 |
 | Video Analysis result | Video Analysis Backend | Agent 可见并可向用户汇报 |
 
 Harness Workspace 不应保存 processed dataset 实体、label 文件、checkpoint 或
 model weights。Harness 与 Business 不共享物理路径；Agent Tool Arguments 只传递
-`dataset_ref`、`model_name` 和 `task_id` 等逻辑引用。当前 Processing 的
+`dataset_ref`、`model_id` 和 `task_id` 等逻辑引用。当前 Processing 的
 `raw_video_refs` 是 Harness Workspace 中用户上传视频的路径，由 Harness
 Function 读取并通过 multipart HTTP 上传；视频二进制内容不进入 LLM context。
 
@@ -118,10 +118,9 @@ Function 读取并通过 multipart HTTP 上传；视频二进制内容不进入 
 | Processing | `get_video_processing_result` | 已注册 | 已实现 | HTTP POC |
 | Training | `submit_model_training` | 已注册 | 已创建 | 未连接 |
 | Training | `get_model_training_status` | 已注册 | 已实现 | HTTP POC |
-| Training | `get_model_training_result` | 已注册 | 已创建 | 未连接 |
+| Training | `get_model_training_result` | 已注册 | 已实现 | HTTP POC |
 
-当前 Model Training 的 Submit 和 Result 占位 Function 被调用时会
-返回受控错误：
+当前 Model Training 的 Submit 占位 Function 被调用时会返回受控错误：
 
 ```text
 <function_name> is registered but not implemented
@@ -160,11 +159,11 @@ get_video_processing_result(task_id)
 - `submit` 和 `status` 的状态及返回 envelope 与 Analysis 对齐。
 - `get_video_processing_result` 返回 `dataset_id` 和 Harness 授权的相对
   `manifest_path`，不返回 Business 物理路径。
-- Business `/result/{task_id}` 响应是包含 `dataset_id` 的完整 public
-  dataset manifest JSON object；Harness 将其原子写入
+- Business `/result/{task_id}` 响应包含 public `manifest` JSON object；
+  Harness 只将该嵌套 object 原子写入
   `AGENT_WORKSPACE/datasets/{dataset_id}.json`。
 
-### Model Training Skeleton
+### Model Training
 
 ```text
 submit_model_training(scenario, dataset_ref, idempotency_key)
@@ -173,8 +172,11 @@ get_model_training_result(task_id)
 ```
 
 - `dataset_ref` 必须来自已完成的 Processing 结果，不是文件系统路径。
-- `get_model_training_result` 未来返回逻辑 `model_name` 和安全的公开元数据，
-  不返回 model artifact 路径。
+- `get_model_training_result` 返回 `task_id`、`status="done"`、`model_id`
+  和 Harness 授权的相对 `metadata_path`，不返回 model artifact 路径。
+- Business `/result/{task_id}` 响应包含 public `metadata` JSON object；
+  Harness 只将该嵌套 object 原子写入
+  `AGENT_WORKSPACE/models/{model_id}.json`。
 
 Processing 的 result schema 仍是待与 Business 确认的 POC Contract；
 Training 的真实状态枚举、result schema 和错误合约尚未与 Business
@@ -198,9 +200,10 @@ tests/
 - `test_video_analysis_unit.py` 验证已实现的 Analysis Functions。
 - `test_video_processing.py` 验证 Processing submit/status/result HTTP POC、
   manifest 持久化和 Tool Schema。
-- `test_model_training.py` 验证 Training 函数签名、Tool Schema、Status
-  HTTP 调用与 Task JSON 持久化，以及 Submit/Result 受控未实现错误。
-- 当前三个业务单元测试文件共 45 个相关测试通过。
+- `test_model_training.py` 验证 Training 函数签名、Tool Schema、Status/Result
+  HTTP 调用、Task JSON 和 model metadata 持久化，以及 Submit 受控
+  未实现错误。
+- 当前三个业务单元测试文件共 51 个相关测试通过。
 
 ## 8. 当前限制
 
@@ -209,7 +212,7 @@ tests/
   Task JSON POC。
 - Analysis Tool Contract 仍支持 Business 服务器路径和 COS 路径；Processing
   当前只支持 Harness 服务器上的上传文件。
-- Model Training 目前只实现 Status HTTP POC；Submit 和 Result 仍未实现。
+- Model Training 目前已实现 Status/Result HTTP POC；Submit 仍未实现。
 - Harness 负责通过 HTTP 上传 raw video；应继续验证大文件超时、流式传输、
   文件大小限制和失败重试，不应将视频 Base64 放入 LLM Tool Arguments。
 - 当前只有 `fire_inspection` 一个 scenario，尚无正式 Scenario Registry。
@@ -227,7 +230,7 @@ tests/
 | `AGENT_WORKSPACE` | 已接入 | Harness 的受控 Agent Workspace |
 | `VIDEO_ANALYSIS_API` | 已接入 | Video Analysis HTTP API |
 | `VIDEO_PROCESSING_API` | 已接入 | Video Processing HTTP API |
-| `MODEL_TRAINING_API` | 已接入 | Model Training Status HTTP API |
+| `MODEL_TRAINING_API` | 已接入 | Model Training Status/Result HTTP API |
 
 `BUSINESS_API_*`、`TASK_API_*`、`VIDEO_OUTPUT_DIR` 和 `TASK_LOG_DIR` 等早期预留
 变量尚未接入当前代码。Harness 可持有调用 Business API 所需的最小权限
@@ -245,8 +248,9 @@ tests/
   dataset manifest 保存到 `AGENT_WORKSPACE/datasets/{dataset_id}.json`。
 - [x] 实现 `get_model_training_status` 的 Harness HTTP 调用与 Training
   Task JSON 更新。
-- [ ] 实现 `submit_model_training` 和 `get_model_training_result` 的
-  Harness HTTP 调用。
+- [x] 实现 `get_model_training_result` 的 Harness HTTP 调用，并将 public
+  model metadata 保存到 `AGENT_WORKSPACE/models/{model_id}.json`。
+- [ ] 实现 `submit_model_training` 的 Harness HTTP 调用。
 - [ ] 定义 raw video 从 Harness 上传到 Business API 的大文件传输、
   超时、重试和大小限制 Contract。
 - [ ] 统一三个模块的 submit/status/result envelope，但不擅自重命名 Business
@@ -273,7 +277,8 @@ tests/
 - [ ] 明确 Tool 可用的条件为 Schema 已注册、handler 已实现、Business API
   已配置且 policy 允许；不能只以“已注册”判断可用。
 - [ ] 写入 User / Agent / Business Backend 三层信息视图和输出过滤规则。
-- [ ] 规定 dataset manifest、`dataset_ref` 和 `model_name` 只能用于 Agent 内部
+- [ ] 规定 dataset manifest、`dataset_ref`、`model_id` 和 model-metadata path
+  只能用于 Agent 内部
   Tool 编排，不向普通用户展示。
 - [ ] 更新 Workspace 边界：Harness 只保存 raw videos 和安全逻辑引用，
   processed datasets、labels 和 model artifacts 由 Business Backend 所有。
@@ -343,8 +348,8 @@ tests/
 4. 创建类请求可幂等重放，不会意外创建重复任务。
 5. Harness 和 Business 不共享文件系统；Tool Arguments 只传递受控逻辑引用，
    raw video 数据只能通过经批准的 MCP Data Transfer Contract 跨边界传输。
-6. Agent 可使用 public dataset manifest、`dataset_ref` 和 `model_name` 进行内部
-   编排，但不向普通用户展示这些信息。
+6. Agent 可使用 public dataset manifest、`dataset_ref`、`model_id` 和
+   model-metadata path 进行内部编排，但不向普通用户展示这些信息。
 7. 用户只看到 Processing/Training/Analysis 的业务进度、成败和最终 Analysis
    结果。
 8. API Key、MCP 凭据、视频二进制内容、Backend 路径和敏感日志不进入 Git、

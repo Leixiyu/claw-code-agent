@@ -443,10 +443,9 @@ def default_tool_registry() -> dict[str, AgentTool]:
         AgentTool(
             name='get_model_training_result',
             description=(
-                'Get the logical model name and public metadata produced by a completed '
-                'model-training task. Backend model paths are never exposed. This contract '
-                'is registered for integration work, but its backend implementation is not '
-                'connected yet.'
+                'Get the logical model ID and authorized metadata path produced by a '
+                'completed model-training task. The Harness saves public model metadata '
+                'in the Agent workspace; Backend model artifact paths are never exposed.'
             ),
             parameters={
                 'type': 'object',
@@ -1633,6 +1632,7 @@ def _get_model_training_result(
     try:
         return get_model_training_result(
             arguments,
+            workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
     except ModelTrainingError as exc:
