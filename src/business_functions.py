@@ -1,4 +1,4 @@
-"""Business-facing Video Analysis and Video Processing Functions."""
+"""Business-facing Analysis, Processing, and Model Training Functions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import mimetypes
 import os
 import threading
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -16,10 +16,11 @@ import httpx
 
 VIDEO_ANALYSIS_API_ENV = 'VIDEO_ANALYSIS_API'
 VIDEO_PROCESSING_API_ENV = 'VIDEO_PROCESSING_API'
+MODEL_TRAINING_API_ENV = 'MODEL_TRAINING_API'
 SUPPORTED_SCENARIOS = frozenset({'fire_inspection'})
 VIDEO_REF_TYPES = frozenset({'upload_file', 'local_file', 'cos_file'})
 
-_VIDEO_TASK_STATUSES = frozenset({'pending', 'running', 'done', 'failed'})
+_BUSINESS_TASK_STATUSES = frozenset({'pending', 'running', 'done', 'failed'})
 
 _BUSINESS_FUNCTIONS_DIRECTORY = Path('.port_sessions') / 'business_functions'
 _ANALYSIS_IDEMPOTENCY_FILE = 'video_analysis_idempotency.json'
@@ -544,8 +545,12 @@ def _locked_registry(
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+def _beijing_timestamp() -> str:
+    return (
+        datetime.now(timezone(timedelta(hours=8)))
+        .replace(tzinfo=None)
+        .isoformat()
+    )
 
 
 def _task_record_path(
@@ -687,7 +692,7 @@ def _persist_task_submission(
             error_type=error_type,
         )
         existing = _read_task_record(task_path, error_type=error_type)
-        timestamp = _utc_timestamp()
+        timestamp = _beijing_timestamp()
         record = (
             dict(existing)
             if existing is not None
@@ -736,7 +741,7 @@ def _persist_task_status(
             task_id,
             error_type=error_type,
         )
-        timestamp = _utc_timestamp()
+        timestamp = _beijing_timestamp()
         record = _read_task_record(task_path, error_type=error_type)
         if record is None:
             record = _base_task_record(module, task_id, timestamp)
@@ -754,6 +759,56 @@ def _persist_task_status(
         _write_task_record(task_path, record, error_type=error_type)
 
 
+def _get_business_task_status(
+    arguments: dict[str, Any],
+    *,
+    workspace_root: Path,
+    timeout_seconds: float,
+    api_env: str,
+    operation: str,
+    task_module: str,
+    action: str,
+    error_type: type[RuntimeError],
+) -> tuple[str, dict[str, Any]]:
+    """Query, validate, persist, and render a Business task status."""
+    task_id = _require_string(
+        arguments,
+        'task_id',
+        error_type=error_type,
+    )
+    endpoint = _status_endpoint(
+        os.environ.get(api_env, ''),
+        task_id,
+        api_env=api_env,
+        operation=operation,
+        error_type=error_type,
+    )
+    status = _get_backend_status(
+        endpoint,
+        timeout_seconds,
+        operation=operation,
+        error_type=error_type,
+    )
+    if status not in _BUSINESS_TASK_STATUSES:
+        raise error_type(
+            f'{operation} status API returned unsupported status {status!r}'
+        )
+
+    payload = {
+        'task_id': task_id,
+        'status': status,
+        'is_terminal': status in {'done', 'failed'},
+        'result_ready': status == 'done',
+    }
+    _persist_task_status(
+        workspace_root,
+        task_module,
+        payload,
+        error_type=error_type,
+    )
+    return _render_status_result(payload, action=action)
+
+
 def _persist_task_result(
     workspace_root: Path,
     module: str,
@@ -769,7 +824,7 @@ def _persist_task_result(
             task_id,
             error_type=error_type,
         )
-        timestamp = _utc_timestamp()
+        timestamp = _beijing_timestamp()
         record = _read_task_record(task_path, error_type=error_type)
         if record is None:
             record = _base_task_record(module, task_id, timestamp)
@@ -1102,30 +1157,16 @@ def get_video_analysis_status(
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
     """Query and normalize the current state of a video-analysis task."""
-    task_id = _require_string(arguments, 'task_id')
-    endpoint = _status_endpoint(
-        os.environ.get(VIDEO_ANALYSIS_API_ENV, ''),
-        task_id,
-    )
-    status = _get_backend_status(endpoint, timeout_seconds)
-    if status not in _VIDEO_TASK_STATUSES:
-        raise VideoAnalysisError(
-            f'video analysis status API returned unsupported status {status!r}'
-        )
-
-    payload = {
-        'task_id': task_id,
-        'status': status,
-        'is_terminal': status in {'done', 'failed'},
-        'result_ready': status == 'done',
-    }
-    _persist_task_status(
-        workspace_root,
-        'analysis',
-        payload,
+    return _get_business_task_status(
+        arguments,
+        workspace_root=workspace_root,
+        timeout_seconds=timeout_seconds,
+        api_env=VIDEO_ANALYSIS_API_ENV,
+        operation='video analysis',
+        task_module='analysis',
+        action='get_video_analysis_status',
         error_type=VideoAnalysisError,
     )
-    return _render_status_result(payload)
 
 
 def get_video_processing_status(
@@ -1135,54 +1176,35 @@ def get_video_processing_status(
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
     """Query and normalize the current state of a video-processing task."""
-    task_id = _require_string(
+    return _get_business_task_status(
         arguments,
-        'task_id',
-        error_type=VideoProcessingError,
-    )
-    endpoint = _status_endpoint(
-        os.environ.get(VIDEO_PROCESSING_API_ENV, ''),
-        task_id,
+        workspace_root=workspace_root,
+        timeout_seconds=timeout_seconds,
         api_env=VIDEO_PROCESSING_API_ENV,
         operation='video processing',
-        error_type=VideoProcessingError,
-    )
-    status = _get_backend_status(
-        endpoint,
-        timeout_seconds,
-        operation='video processing',
-        error_type=VideoProcessingError,
-    )
-    if status not in _VIDEO_TASK_STATUSES:
-        raise VideoProcessingError(
-            f'video processing status API returned unsupported status {status!r}'
-        )
-
-    payload = {
-        'task_id': task_id,
-        'status': status,
-        'is_terminal': status in {'done', 'failed'},
-        'result_ready': status == 'done',
-    }
-    _persist_task_status(
-        workspace_root,
-        'processing',
-        payload,
-        error_type=VideoProcessingError,
-    )
-    return _render_status_result(
-        payload,
+        task_module='processing',
         action='get_video_processing_status',
+        error_type=VideoProcessingError,
     )
 
 
 def get_model_training_status(
     arguments: dict[str, Any],
     *,
+    workspace_root: Path,
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
-    """Return the authoritative status of a model-training task."""
-    raise ModelTrainingError('get_model_training_status is registered but not implemented')
+    """Query and normalize the current state of a model-training task."""
+    return _get_business_task_status(
+        arguments,
+        workspace_root=workspace_root,
+        timeout_seconds=timeout_seconds,
+        api_env=MODEL_TRAINING_API_ENV,
+        operation='model training',
+        task_module='training',
+        action='get_model_training_status',
+        error_type=ModelTrainingError,
+    )
 
 
 def get_video_analysis_result(

@@ -1,11 +1,11 @@
 # 视频处理 Agent：当前进度与待开发适配需求
 
 > 本文档是 Harness 接入视频业务的阶段性记录，初始快照日期为
-> **2026-07-25**，最近更新日期为 **2026-08-28**。
+> **2026-07-25**，最近更新日期为 **2026-08-31**。
 >
 > 当前代码状态：Video Analysis 和 Video Processing 的 3 个 Functions
 > 均已实现 HTTP POC；
-> Model Training 的 3 个 Functions 已注册 Tool Schema 和安全占位处理。
+> Model Training Status 已实现 HTTP POC；Submit 和 Result 仍为安全占位。
 
 ## 1. 目标业务
 
@@ -48,9 +48,9 @@ Business Backend APIs
 Business-owned datasets / models / results
 ```
 
-Analysis、Processing 和未来的 Training HTTP 请求都由 Harness Function
-执行。Business API 地址来自 Harness 的受信任配置，不从用户输入或 LLM
-arguments 获取。
+Analysis、Processing、当前 Training Status 以及未来 Training Submit/Result
+的 HTTP 请求都由 Harness Function 执行。Business API 地址来自
+Harness 的受信任配置，不从用户输入或 LLM arguments 获取。
 
 ## 3. 不同角色的信息视图
 
@@ -117,10 +117,11 @@ Function 读取并通过 multipart HTTP 上传；视频二进制内容不进入 
 | Processing | `get_video_processing_status` | 已注册 | 已实现 | HTTP POC |
 | Processing | `get_video_processing_result` | 已注册 | 已实现 | HTTP POC |
 | Training | `submit_model_training` | 已注册 | 已创建 | 未连接 |
-| Training | `get_model_training_status` | 已注册 | 已创建 | 未连接 |
+| Training | `get_model_training_status` | 已注册 | 已实现 | HTTP POC |
 | Training | `get_model_training_result` | 已注册 | 已创建 | 未连接 |
 
-当前三个 Model Training 占位 Function 被调用时会返回受控错误：
+当前 Model Training 的 Submit 和 Result 占位 Function 被调用时会
+返回受控错误：
 
 ```text
 <function_name> is registered but not implemented
@@ -197,9 +198,9 @@ tests/
 - `test_video_analysis_unit.py` 验证已实现的 Analysis Functions。
 - `test_video_processing.py` 验证 Processing submit/status/result HTTP POC、
   manifest 持久化和 Tool Schema。
-- `test_model_training.py` 验证 Training 函数签名、Tool Schema、注册和受控
-  未实现错误。
-- 当前三个业务单元测试文件共 42 个相关测试通过。
+- `test_model_training.py` 验证 Training 函数签名、Tool Schema、Status
+  HTTP 调用与 Task JSON 持久化，以及 Submit/Result 受控未实现错误。
+- 当前三个业务单元测试文件共 45 个相关测试通过。
 
 ## 8. 当前限制
 
@@ -208,7 +209,7 @@ tests/
   Task JSON POC。
 - Analysis Tool Contract 仍支持 Business 服务器路径和 COS 路径；Processing
   当前只支持 Harness 服务器上的上传文件。
-- 三个 Model Training Functions 尚未实现。
+- Model Training 目前只实现 Status HTTP POC；Submit 和 Result 仍未实现。
 - Harness 负责通过 HTTP 上传 raw video；应继续验证大文件超时、流式传输、
   文件大小限制和失败重试，不应将视频 Base64 放入 LLM Tool Arguments。
 - 当前只有 `fire_inspection` 一个 scenario，尚无正式 Scenario Registry。
@@ -226,7 +227,7 @@ tests/
 | `AGENT_WORKSPACE` | 已接入 | Harness 的受控 Agent Workspace |
 | `VIDEO_ANALYSIS_API` | 已接入 | Video Analysis HTTP API |
 | `VIDEO_PROCESSING_API` | 已接入 | Video Processing HTTP API |
-| `MODEL_TRAINING_API` | 待接入 | Model Training HTTP API |
+| `MODEL_TRAINING_API` | 已接入 | Model Training Status HTTP API |
 
 `BUSINESS_API_*`、`TASK_API_*`、`VIDEO_OUTPUT_DIR` 和 `TASK_LOG_DIR` 等早期预留
 变量尚未接入当前代码。Harness 可持有调用 Business API 所需的最小权限
@@ -242,8 +243,10 @@ tests/
   Harness HTTP 调用。
 - [x] 实现 `get_video_processing_result` 的 Harness HTTP 调用，并将 public
   dataset manifest 保存到 `AGENT_WORKSPACE/datasets/{dataset_id}.json`。
-- [ ] 实现 `submit_model_training`、`get_model_training_status` 和
-  `get_model_training_result` 的 Harness HTTP 调用。
+- [x] 实现 `get_model_training_status` 的 Harness HTTP 调用与 Training
+  Task JSON 更新。
+- [ ] 实现 `submit_model_training` 和 `get_model_training_result` 的
+  Harness HTTP 调用。
 - [ ] 定义 raw video 从 Harness 上传到 Business API 的大文件传输、
   超时、重试和大小限制 Contract。
 - [ ] 统一三个模块的 submit/status/result envelope，但不擅自重命名 Business

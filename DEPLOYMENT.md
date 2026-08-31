@@ -13,8 +13,9 @@
 - GUI 只监听 `127.0.0.1`
 
 当前 Harness 是 Agent runtime 和本地管理 GUI。Video Analysis 和 Video
-Processing 的 submit/status/result 六个 Functions 已实现 HTTP POC，但 Model
-Training、Scenario Registry、Webhook、生产级任务数据库和多租户授权仍待开发。
+Processing 的 submit/status/result 六个 Functions 已实现 HTTP POC，Model
+Training Status 也已接入；Training Submit/Result、Scenario Registry、Webhook、
+生产级任务数据库和多租户授权仍待开发。
 
 ## 1. 部署前检查
 
@@ -158,16 +159,15 @@ AGENT_WORKSPACE=/home/atis/Documents/RAY/claw_agent_data/workspace
 
 VIDEO_ANALYSIS_API=http://video-analysis-host:8000
 VIDEO_PROCESSING_API=http://video-processing-host:8000
-
-# 预留：当前 Model Training Functions 尚未实现。
-# MODEL_TRAINING_API=
+MODEL_TRAINING_API=http://model-training-host:8000
 ```
 
 注意：
 
 - `.env` 中直接设置 `OPENAI_API_KEY`，不要使用
   `OPENAI_API_KEY="${DASHSCOPE_API_KEY}"`；systemd `EnvironmentFile` 不执行变量展开。
-- `VIDEO_ANALYSIS_API` 和 `VIDEO_PROCESSING_API` 填写对应 Backend 的
+- `VIDEO_ANALYSIS_API`、`VIDEO_PROCESSING_API` 和 `MODEL_TRAINING_API`
+  填写对应 Backend 的
   base URL，不要在末尾手动加具体业务 endpoint。
 - 不要在终端、日志、截图或文档中输出真实 API Key。
 
@@ -246,7 +246,7 @@ OPENAI_MODEL
 API Key 的区域和权限
 AGENT_WORKSPACE 是否存在且可读
 Workspace/CLAUDE.md 是否存在且占位符已替换
-VIDEO_ANALYSIS_API 和 VIDEO_PROCESSING_API 是否配置正确
+VIDEO_ANALYSIS_API、VIDEO_PROCESSING_API 和 MODEL_TRAINING_API 是否配置正确
 ```
 
 ### 6.1 验证业务 Functions
@@ -264,12 +264,14 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest \
 然后在测试 Backend 或 SSH tunnel 可用时，使用已知视频分别完成一次
 Video Analysis 和 Video Processing 的 submit/status/result 闭环。验收时检查：
 
-- Agent 可见并可调用六个 Analysis/Processing Functions。
+- Agent 可见九个业务 Functions；Analysis/Processing 六个 Functions 可完成
+  submit/status/result，Training Status 可完成 HTTP 查询。
 - submit 后生成 `workspace/tasks/<module>/<task_id>.json`。
 - status 调用会更新对应 Task JSON。
 - Processing result 完成后生成 `workspace/datasets/<dataset_id>.json`，函数只
   返回 Agent 可见的 `manifest_path`，不泄露 Backend 物理路径。
-- Model Training 的三个 Functions 目前仅为占位，不纳入真实业务验收。
+- Model Training Status 可验证 `GET /status/{task_id}` 和
+  `workspace/tasks/training/<task_id>.json`；Submit 和 Result 仍不纳入真实业务验收。
 
 ## 7. 创建 systemd 服务
 
@@ -461,10 +463,11 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - Video Processing 的 submit/status/result 三个 Functions。
 - Analysis/Processing Task JSON 在 Agent Workspace 中的创建和更新。
 - Processing result 对 public dataset manifest 的保存和 Agent 可见引用。
+- Model Training Status 的 HTTP 查询与 Training Task JSON 更新。
 
 部署成功不表示以下能力已完成：
 
-- Model Training 的 submit/status/result 真实实现。
+- Model Training 的 submit/result 真实实现。
 - Scenario Registry 和 scenario 版本管理。
 - 完整的对象存储生命周期、模型部署和回滚。
 - 生产级权威任务数据库、Webhook 和可靠轮询。
@@ -480,7 +483,8 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - [ ] API Key 只存在于 Harness 根目录的 `.env`。
 - [ ] `.env` 所有者是 `atis`，权限为 `600`。
 - [ ] `.env` 已被 `.gitignore` 忽略，没有进入 Git。
-- [ ] `AGENT_WORKSPACE`、`VIDEO_ANALYSIS_API` 和 `VIDEO_PROCESSING_API`
+- [ ] `AGENT_WORKSPACE`、`VIDEO_ANALYSIS_API`、`VIDEO_PROCESSING_API` 和
+      `MODEL_TRAINING_API`
       已在 `.env` 中设置。
 - [ ] Workspace 的 `uploads/`、`datasets/`、`models/` 和三类
       `tasks/` 目录已创建。
@@ -492,11 +496,12 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
       业务 Functions 实现的授权持久化。
 - [ ] systemd 服务可以自动启动和失败重启。
 - [ ] `/api/state` 健康检查通过。
-- [ ] Analysis/Processing 六个 Functions 可见，并已完成至少一次
+- [ ] 九个业务 Functions 可见；Analysis/Processing 已完成至少一次
       可控的 submit/status/result 验收。
 - [ ] Task JSON 会创建并更新，Processing result 会保存 public
       dataset manifest。
-- [ ] 已明确 Model Training Functions 仍是占位实现，不对用户宣称可用。
+- [ ] Model Training Status 可查询并更新 Training Task JSON。
+- [ ] 已明确 Model Training Submit/Result 仍是占位实现，不对用户宣称可用。
 - [ ] Journal 日志中没有 API Key。
 - [ ] Agent session 中没有 API Key。
 - [ ] 已记录当前部署 commit。

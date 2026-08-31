@@ -1617,6 +1617,7 @@ def _get_model_training_status(
     try:
         return get_model_training_status(
             arguments,
+            workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
     except ModelTrainingError as exc:
