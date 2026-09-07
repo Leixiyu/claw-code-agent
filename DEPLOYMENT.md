@@ -8,8 +8,8 @@
 - LLM 通过阿里云百炼 OpenAI-compatible API 调用
 - systemd 负责进程守护
 - 4090 POC 使用现有非 root 用户 `atis`
-- Harness 路径为 `/home/atis/Documents/RAY/claw_code_agent`
-- 运行数据存放在相邻的 `/home/atis/Documents/RAY/claw_agent_data`
+- Harness 路径为 `/home/atis/Documents/RAY/claw-code-agent`
+- 运行数据存放在相邻的 `/home/atis/Documents/RAY/agent_workspace`
 - GUI 只监听 `127.0.0.1`
 
 当前 Harness 是 Agent runtime 和本地管理 GUI。Video Analysis 和 Video
@@ -24,9 +24,9 @@ Training submit/status/result 也已接入；Scenario Registry、Webhook、生�
 | 配置项 | 本文示例 | 用途 |
 | --- | --- | --- |
 | 服务用户 | `atis` | 非 root 用户，拥有运行数据的读写权限 |
-| 代码目录 | `/home/atis/Documents/RAY/claw_code_agent` | Git 仓库、虚拟环境和 `.env` |
-| 运行数据目录 | `/home/atis/Documents/RAY/claw_agent_data` | 容纳 workspace、会话和运行时 HOME |
-| Agent workspace | 运行数据目录下的 `workspace/` | Agent 的业务文件操作根目录，名称和位置可自选 |
+| 代码目录 | `/home/atis/Documents/RAY/claw-code-agent` | Git 仓库、虚拟环境和 `.env` |
+| 运行数据目录 | `/home/atis/Documents/RAY/agent_workspace` | 直接容纳业务文件、会话和运行时 HOME |
+| Agent workspace | `/home/atis/Documents/RAY/agent_workspace`（与运行数据根目录相同） | Agent 的业务文件操作根目录，名称和位置可自选 |
 
 部署分三层验收：GUI 服务可用、模型调用可用、业务闭环可用。Backend 未接通时
 可以完成前两层；工具已注册或 GUI 已启动，不代表业务任务可以成功执行。
@@ -66,8 +66,8 @@ sudo apt-get install -y git python3 python3-venv curl ca-certificates
 代码和运行数据分开放置：
 
 ```text
-/home/atis/Documents/RAY/claw_code_agent   # Git 代码和 Python 虚拟环境
-/home/atis/Documents/RAY/claw_agent_data   # Session、Agent Workspace 和运行时 HOME
+/home/atis/Documents/RAY/claw-code-agent   # Git 代码和 Python 虚拟环境
+/home/atis/Documents/RAY/agent_workspace  # Session、Agent Workspace 和运行时 HOME
 ```
 
 ### 2.1 部署时需要准备的内容
@@ -75,10 +75,10 @@ sudo apt-get install -y git python3 python3-venv curl ca-certificates
 以服务用户 `atis` 执行：
 
 ```bash
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace/uploads
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/runtime-home/.claude
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/sessions
-chmod 700 /home/atis/Documents/RAY/claw_agent_data
+mkdir -p /home/atis/Documents/RAY/agent_workspace/uploads
+mkdir -p /home/atis/Documents/RAY/agent_workspace/runtime-home/.claude
+mkdir -p /home/atis/Documents/RAY/agent_workspace/sessions
+chmod 700 /home/atis/Documents/RAY/agent_workspace
 ```
 
 - workspace 根目录需提前存在，并允许服务用户读写。它不必叫 `workspace`。
@@ -92,7 +92,7 @@ chmod 700 /home/atis/Documents/RAY/claw_agent_data
 最小业务 workspace（完成第 5.2 节并放入测试视频后）：
 
 ```text
-workspace/                  # 根目录名可自选
+agent_workspace/            # 本文实际使用的根目录，没有额外的 workspace/ 层
 ├── CLAUDE.md                # 从 agent_operation.md 生成
 └── uploads/
     └── example.mp4         # 自行提供的原始视频
@@ -127,7 +127,7 @@ workspace/                  # 根目录名可自选
 mkdir -p /home/atis/Documents/RAY
 git clone \
   https://github.com/Leixiyu/claw-code-agent.git \
-  /home/atis/Documents/RAY/claw_code_agent
+  /home/atis/Documents/RAY/claw-code-agent
 ```
 
 如果代码已经位于该路径，不要再次 clone。
@@ -135,29 +135,59 @@ git clone \
 确认版本：
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
+cd /home/atis/Documents/RAY/claw-code-agent
 git branch --show-current
 git log -1 --oneline
 ```
 
 生产部署应记录当前 commit，以便回滚。
 
-## 4. 创建虚拟环境并安装依赖
+## 4. 创建 Python 环境并安装依赖
+
+下面两种方式**二选一**。后续终端命令统一使用已激活环境中的 `python` 和
+`claw-code-agent` / `claw-code-gui`，不要混用两套环境。新开终端时需重新激活。
+
+### 4.1 标准 venv
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
+cd /home/atis/Documents/RAY/claw-code-agent
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip setuptools wheel
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install . --no-deps
 ```
 
-验证入口：
+安装后激活：
 
 ```bash
-/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-agent --help
-/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-gui --help
+source /home/atis/Documents/RAY/claw-code-agent/.venv/bin/activate
 ```
+
+### 4.2 Conda（已安装 Conda 时）
+
+`claw-agent` 是示例环境名；环境已存在时跳过创建步骤。
+
+```bash
+conda create -n claw-agent python=3.10 pip -y
+conda activate claw-agent
+cd /home/atis/Documents/RAY/claw-code-agent
+python -m pip install -r requirements.txt
+python -m pip install . --no-deps
+```
+
+### 4.3 验证当前环境
+
+```bash
+python --version
+which python
+which claw-code-agent
+which claw-code-gui
+claw-code-agent --help
+claw-code-gui --help
+```
+
+确认上述入口来自同一个所选环境。记录 `which claw-code-gui` 的绝对路径，
+第 7 节配置 systemd 时使用。Conda 环境不需要再创建仓库中的 `.venv`。
 
 `vLLM` 不应安装到这个 Harness 虚拟环境。只有在服务器自行托管模型时，才应为 vLLM
 建立独立环境或容器。
@@ -167,13 +197,13 @@ python3 -m venv .venv
 4090 是个人测试服务器，因此统一使用 Harness 根目录下的 `.env`：
 
 ```text
-/home/atis/Documents/RAY/claw_code_agent/.env
+/home/atis/Documents/RAY/claw-code-agent/.env
 ```
 
 进入项目并创建或编辑：
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
+cd /home/atis/Documents/RAY/claw-code-agent
 nano .env
 ```
 
@@ -184,7 +214,7 @@ OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_API_KEY=替换为真实百炼APIKey
 OPENAI_MODEL=qwen3-coder-next
 
-AGENT_WORKSPACE=/home/atis/Documents/RAY/claw_agent_data/workspace
+AGENT_WORKSPACE=/home/atis/Documents/RAY/agent_workspace
 
 VIDEO_ANALYSIS_API=http://video-analysis-host:8000
 VIDEO_PROCESSING_API=http://video-processing-host:8000
@@ -203,7 +233,7 @@ MODEL_TRAINING_API=http://model-training-host:8000
 设置权限：
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
+cd /home/atis/Documents/RAY/claw-code-agent
 chown atis:"$(id -gn atis)" .env
 chmod 600 .env
 git check-ignore -v .env
@@ -252,19 +282,19 @@ Agent Workspace 根目录，命名为 `CLAUDE.md`，并把 Workspace 占位符�
 
 ```bash
 sed \
-  's|{{AGENT_WORKSPACE_PATH}}|/home/atis/Documents/RAY/claw_agent_data/workspace|g' \
-  /home/atis/Documents/RAY/claw_code_agent/agent_operation.md \
-  > /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
-chmod 600 /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
+  's|{{AGENT_WORKSPACE_PATH}}|/home/atis/Documents/RAY/agent_workspace|g' \
+  /home/atis/Documents/RAY/claw-code-agent/agent_operation.md \
+  > /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
+chmod 600 /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
 ```
 
 验证文件中已写入实际 Workspace：
 
 ```bash
 grep -n 'Agent Workspace root' \
-  /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
-grep -n '/home/atis/Documents/RAY/claw_agent_data/workspace' \
-  /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
+  /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
+grep -n '/home/atis/Documents/RAY/agent_workspace' \
+  /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
 ```
 
 Agent 从工作区中读取这份 `CLAUDE.md`。仓库根目录的 `CLAUDE.md` 用于
@@ -277,16 +307,17 @@ Agent 从工作区中读取这份 `CLAUDE.md`。仓库根目录的 `CLAUDE.md` �
 
 ## 6. 先进行命令行 Smoke Test
 
-本节验证模型调用和工作区指令，不提交业务任务。使用服务用户在 Bash 中加载
+本节验证模型调用和工作区指令，不提交业务任务。先按第 4 节激活所选环境，
+再使用服务用户在 Bash 中加载
 自己维护的受信任 `.env`（`source` 会执行其中的 Shell 内容），再进行只读测试：
 
 ```bash
 set -a
-source /home/atis/Documents/RAY/claw_code_agent/.env
+source /home/atis/Documents/RAY/claw-code-agent/.env
 set +a
 
-cd /home/atis/Documents/RAY/claw_agent_data/workspace
-/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-agent agent \
+cd /home/atis/Documents/RAY/agent_workspace
+claw-code-agent agent \
   "只检查 Agent Workspace 并简要说明可见目录，不要修改任何内容。"
 ```
 
@@ -300,7 +331,7 @@ cd /home/atis/Documents/RAY/claw_agent_data/workspace
   授权 Workspace 内的 Task JSON 和 public manifest。
 - 默认不能执行 Shell。
 - CLI 的 session 和幂等 POC 状态可写入
-  `/home/atis/Documents/RAY/claw_agent_data/workspace/.port_sessions`。
+  `/home/atis/Documents/RAY/agent_workspace/.port_sessions`。
 - 输出和 session 中不应出现 API Key。
 
 如果这一步失败，先不要创建 systemd 服务。优先检查：
@@ -320,11 +351,11 @@ Workspace/CLAUDE.md 是否存在且占位符已替换
 
 ### 6.1 验证业务 Functions
 
-先在仓库中运行不依赖真实 Backend 的测试：
+先激活第 4 节所选环境，再在仓库中运行不依赖真实 Backend 的测试：
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest \
+cd /home/atis/Documents/RAY/claw-code-agent
+PYTHONDONTWRITEBYTECODE=1 python -m unittest \
   tests.test_video_analysis_unit \
   tests.test_video_processing \
   tests.test_model_training
@@ -340,20 +371,28 @@ Backend 尚未就绪时，记录本节“未验收”，仍可继续启动 GUI�
 
 - Agent 可见九个业务 Functions，三个模块都可完成
   submit/status/result HTTP POC。
-- submit 后生成 `workspace/tasks/<module>/<task_id>.json`。
+- submit 后生成 `agent_workspace/tasks/<module>/<task_id>.json`。
 - status 调用会更新对应 Task JSON。
 - `status="done"` 且 `result_ready=true` 后，同一轮调用对应 result Function；
   不只报告任务完成而遗漏结果获取。
-- Processing result 完成后生成 `workspace/datasets/<dataset_id>.json`，函数只
+- Processing result 完成后生成 `agent_workspace/datasets/<dataset_id>.json`，函数只
   返回 Agent 可见的 `manifest_path`，不泄露 Backend 物理路径。
 - Model Training Submit 会先校验
-  `workspace/datasets/<dataset_ref>.json` 存在、身份与 scenario 匹配且
+  `agent_workspace/datasets/<dataset_ref>.json` 存在、身份与 scenario 匹配且
   `status="ready"`，再验证 `POST /train` 纯 JSON 请求；Status 可验证
   `GET /status/{task_id}`；Result 可验证
-  `GET /result/{task_id}`、`workspace/models/<model_id>.json` 和
-  `workspace/tasks/training/<task_id>.json`。
+  `GET /result/{task_id}`、`agent_workspace/models/<model_id>.json` 和
+  `agent_workspace/tasks/training/<task_id>.json`。
 
 ## 7. 创建 systemd 服务
+
+先激活所选 Python 环境，执行 `which claw-code-gui` 获取入口的绝对路径。
+下面 unit 的 `ExecStart` 使用标准 venv 示例：
+
+- **标准 venv：**保留示例路径，前提是第 4.1 节已完成。
+- **Conda：**将 `ExecStart=` 后的可执行文件路径替换为上述命令的实际输出，
+  保留后面的启动参数。不要猜测 Conda 安装位置，也不要在 unit 中写
+  `conda activate`；systemd 通过绝对路径启动入口，不依赖终端已激活的环境。
 
 创建 `/etc/systemd/system/claw-code-agent.service`：
 
@@ -366,15 +405,15 @@ After=network-online.target
 [Service]
 Type=simple
 User=atis
-WorkingDirectory=/home/atis/Documents/RAY/claw_agent_data
-EnvironmentFile=/home/atis/Documents/RAY/claw_code_agent/.env
-Environment=HOME=/home/atis/Documents/RAY/claw_agent_data/runtime-home
+WorkingDirectory=/home/atis/Documents/RAY/agent_workspace
+EnvironmentFile=/home/atis/Documents/RAY/claw-code-agent/.env
+Environment=HOME=/home/atis/Documents/RAY/agent_workspace/runtime-home
 
-ExecStart=/home/atis/Documents/RAY/claw_code_agent/.venv/bin/claw-code-gui \
+ExecStart=/home/atis/Documents/RAY/claw-code-agent/.venv/bin/claw-code-gui \
   --host 127.0.0.1 \
   --port 8765 \
   --no-browser \
-  --session-dir /home/atis/Documents/RAY/claw_agent_data/sessions
+  --session-dir /home/atis/Documents/RAY/agent_workspace/sessions
 
 Restart=on-failure
 RestartSec=5
@@ -385,8 +424,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadOnlyPaths=/home/atis/Documents/RAY/claw_code_agent
-ReadWritePaths=/home/atis/Documents/RAY/claw_agent_data
+ReadOnlyPaths=/home/atis/Documents/RAY/claw-code-agent
+ReadWritePaths=/home/atis/Documents/RAY/agent_workspace
 
 [Install]
 WantedBy=multi-user.target
@@ -475,12 +514,12 @@ http://127.0.0.1:8765
 安排维护窗口，暂停新请求并记录运行中业务的 `task_id`。等待当前 Agent 回合
 结束再停止服务；停止 Harness 不会取消已经提交到 Backend 的任务。
 
-更新前记录当前 commit 和已安装依赖：
+更新前先激活服务实际使用的 Python 环境（第 4 节），记录当前 commit 和已安装依赖：
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
+cd /home/atis/Documents/RAY/claw-code-agent
 git rev-parse HEAD
-.venv/bin/pip freeze > /home/atis/Documents/RAY/claw_agent_data/requirements.before-update.txt
+python -m pip freeze > /home/atis/Documents/RAY/agent_workspace/requirements.before-update.txt
 ```
 
 停止服务后，备份 `sessions/`、workspace 的 `CLAUDE.md`、`tasks/`、`datasets/`、
@@ -497,17 +536,17 @@ sudo systemctl stop claw-code-agent
 拉取并重新安装（任一步失败即停止，修复或回滚后再启动服务）：
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
+cd /home/atis/Documents/RAY/claw-code-agent
 git fetch origin
 git switch main
 git pull --ff-only origin main
-.venv/bin/pip install -r requirements.txt
-.venv/bin/pip install . --no-deps
+python -m pip install -r requirements.txt
+python -m pip install . --no-deps
 sed \
-  's|{{AGENT_WORKSPACE_PATH}}|/home/atis/Documents/RAY/claw_agent_data/workspace|g' \
+  's|{{AGENT_WORKSPACE_PATH}}|/home/atis/Documents/RAY/agent_workspace|g' \
   agent_operation.md \
-  > /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
-chmod 600 /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
+  > /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
+chmod 600 /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
 sudo systemctl start claw-code-agent
 ```
 
@@ -528,19 +567,20 @@ sudo journalctl -u claw-code-agent -n 100 --no-pager
 ## 11. 回滚
 
 暂停新请求、记录任务 ID 并停止服务，然后使用更新前记录的 commit。
-以下命令中的 `<known-good-commit>` 必须替换成真实 commit：
+执行前激活服务实际使用的 Python 环境；以下命令中的 `<known-good-commit>`
+必须替换成真实 commit。任一步失败即停止，不要继续启动服务：
 
 ```bash
-cd /home/atis/Documents/RAY/claw_code_agent
+cd /home/atis/Documents/RAY/claw-code-agent
 sudo systemctl stop claw-code-agent
 git switch --detach <known-good-commit>
-.venv/bin/pip install -r requirements.txt
-.venv/bin/pip install . --no-deps
+python -m pip install -r requirements.txt
+python -m pip install . --no-deps
 sed \
-  's|{{AGENT_WORKSPACE_PATH}}|/home/atis/Documents/RAY/claw_agent_data/workspace|g' \
+  's|{{AGENT_WORKSPACE_PATH}}|/home/atis/Documents/RAY/agent_workspace|g' \
   agent_operation.md \
-  > /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
-chmod 600 /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
+  > /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
+chmod 600 /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
 sudo systemctl start claw-code-agent
 ```
 
@@ -598,7 +638,8 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 
 ### Harness 与模型验收
 
-- [ ] Python 版本不低于 3.10。
+- [ ] Python 版本不低于 3.10，已选择并安装 venv 或 Conda 环境。
+- [ ] systemd `ExecStart` 指向该环境中实际存在的 `claw-code-gui` 绝对路径。
 - [ ] 服务由 `atis` 非 root 用户运行。
 - [ ] API Key 通过受控 `.env` 注入，未写入代码或 Agent 指令。
 - [ ] `.env` 所有者是 `atis`，权限为 `600`。
@@ -606,7 +647,7 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - [ ] `AGENT_WORKSPACE` 和模型连接配置已在 `.env` 中设置。
 - [ ] Workspace 根目录存在且服务用户可读写。
 - [ ] `--cwd` / `AGENT_WORKSPACE` 指向预期根目录；自动生成目录无需预创建。
-- [ ] `workspace/CLAUDE.md` 已从 `agent_operation.md` 生成，包含实际
+- [ ] `agent_workspace/CLAUDE.md` 已从 `agent_operation.md` 生成，包含实际
       Workspace 路径且没有遗留占位符。
 - [ ] systemd 的 `HOME` 指向可写的 `runtime-home`。
 - [ ] GUI 只监听 `127.0.0.1`。
@@ -627,6 +668,7 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - [ ] Model Training Submit 会先校验 ready dataset manifest，然后只发送
       逻辑 JSON 引用；Status/Result 可查询，会更新 Training Task JSON
       并保存 public model metadata。
+
 ### 运维验收
 
 - [ ] Journal 日志中没有 API Key。
