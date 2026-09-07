@@ -17,6 +17,20 @@ Processing 的 submit/status/result 六个 Functions 已实现 HTTP POC，Model
 Training submit/status/result 也已接入；Scenario Registry、Webhook、生产级
 任务数据库和多租户授权仍待开发。
 
+文中的 `atis` 和 `/home/atis/Documents/RAY/...` 都是可替换的部署示例，
+不是 Harness 的固定要求。下文保留同一组完整路径，便于逐段执行；换服务器时
+应统一替换命令、`.env`、`CLAUDE.md` 和 systemd 配置中的对应值。
+
+| 配置项 | 本文示例 | 用途 |
+| --- | --- | --- |
+| 服务用户 | `atis` | 非 root 用户，拥有运行数据的读写权限 |
+| 代码目录 | `/home/atis/Documents/RAY/claw_code_agent` | Git 仓库、虚拟环境和 `.env` |
+| 运行数据目录 | `/home/atis/Documents/RAY/claw_agent_data` | 容纳 workspace、会话和运行时 HOME |
+| Agent workspace | 运行数据目录下的 `workspace/` | Agent 的业务文件操作根目录，名称和位置可自选 |
+
+部署分三层验收：GUI 服务可用、模型调用可用、业务闭环可用。Backend 未接通时
+可以完成前两层；工具已注册或 GUI 已启动，不代表业务任务可以成功执行。
+
 ## 1. 部署前检查
 
 服务器至少需要：
@@ -56,35 +70,50 @@ sudo apt-get install -y git python3 python3-venv curl ca-certificates
 /home/atis/Documents/RAY/claw_agent_data   # Session、Agent Workspace 和运行时 HOME
 ```
 
-以 `atis` 用户创建运行目录：
+### 2.1 部署时需要准备的内容
+
+以服务用户 `atis` 执行：
 
 ```bash
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/sessions
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/runtime-home/.claude
 mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace/uploads
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace/datasets
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace/models
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace/tasks/analysis
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace/tasks/processing
-mkdir -p /home/atis/Documents/RAY/claw_agent_data/workspace/tasks/training
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/runtime-home/.claude
+mkdir -p /home/atis/Documents/RAY/claw_agent_data/sessions
 chmod 700 /home/atis/Documents/RAY/claw_agent_data
 ```
 
-当前 Workspace 结构为：
+- workspace 根目录需提前存在，并允许服务用户读写。它不必叫 `workspace`。
+- 第 5.2 节会生成根目录下的 `CLAUDE.md`。
+- 原始视频需自行放入或由上传服务写入。`uploads/` 是本文采用的输入目录；
+  仅创建空目录不会产生可用的视频输入。
+- `runtime-home/` 是本文 systemd 配置的可写 HOME；提前准备它，避免运行时
+  组件尝试写入受保护的 `/home/atis/.claude`。
+- GUI 会话目录 `sessions/` 保存时也会自动创建；这里提前准备以便检查权限。
+
+最小业务 workspace（完成第 5.2 节并放入测试视频后）：
 
 ```text
-workspace/
-├── uploads/                 # 用户上传且 Agent 可授权引用的 raw videos
-├── datasets/                # Agent 可见的 public dataset manifests
-├── models/                  # 预留的 model metadata
-├── tasks/
-│   ├── analysis/            # Video Analysis Task JSON
-│   ├── processing/          # Video Processing Task JSON
-│   └── training/            # 预留的 Model Training Task JSON
-└── .port_sessions/          # Harness 运行时和幂等 POC 状态，按需创建
+workspace/                  # 根目录名可自选
+├── CLAUDE.md                # 从 agent_operation.md 生成
+└── uploads/
+    └── example.mp4         # 自行提供的原始视频
 ```
 
-`runtime-home/` 是 systemd 服务的可写 HOME，避免运行时组件在 `ProtectHome=read-only` 下写入 `/home/atis/.claude`。
+### 2.2 运行时自动生成的内容
+
+以下目录不用预先创建；相应业务调用首次写入时会创建父目录：
+
+| workspace 内路径 | 生成时机和内容 |
+| --- | --- |
+| `datasets/` | 获取处理结果后保存 dataset manifest |
+| `models/` | 获取训练结果后保存模型元数据 |
+| `tasks/analysis/` | 保存或更新分析任务记录 |
+| `tasks/processing/` | 保存或更新处理任务记录 |
+| `tasks/training/` | 保存或更新训练任务记录 |
+| `.port_sessions/business_functions/` | 保存业务幂等、锁等运行状态 |
+
+这些子目录名由当前代码固定，不能仅通过修改提示词改名。
+`datasets/` 和 `models/` 保存 Agent 可见的 manifest/元数据，不存训练数据集实体
+或模型权重；处理后视频、标签、权重和业务日志由 Business Backend 管理。
 
 这样视频引用、manifest、Task 和 Session 不会进入 Git 仓库。正式生产或
 多人共用服务器时，建议再将代码迁移到 `/opt/claw-code-agent`，并使用独立的
@@ -182,7 +211,40 @@ git check-ignore -v .env
 
 `600` 表示只有 `atis` 可以读取和修改该文件。
 
-### 5.1 安装运行时 Agent 指令
+### 5.1 工作目录与配置加载规则
+
+CLI 和 GUI 的 Agent workspace 选择顺序均为：
+
+```text
+显式 --cwd > AGENT_WORKSPACE > 启动进程的当前目录
+```
+
+例如 GUI 可使用 `--cwd /srv/video-agent-data` 覆盖环境变量。服务器配置使用
+绝对路径，避免相对路径随启动位置变化。本文 systemd 不传 `--cwd`，统一以
+`.env` 中的 `AGENT_WORKSPACE` 为准。
+
+`.env` 的加载方式：
+
+- 程序只自动读取**启动时当前目录**下的 `.env`，不会搜索代码仓库或 Agent
+  workspace；`--cwd` 不会改变这一步的查找位置。
+- 自动加载不会覆盖已有进程环境变量。
+- 第 6 节的 CLI 示例先显式 `source` 仓库配置；第 7 节由 systemd 的
+  `EnvironmentFile` 读取同一文件，因此都不依赖自动查找。
+
+以下三个路径不是同一个配置：
+
+| 配置 | 作用 |
+| --- | --- |
+| systemd `WorkingDirectory` | 服务进程当前目录，也是部分相对运行状态路径的基准 |
+| `AGENT_WORKSPACE` / `--cwd` | Agent 业务工作区根目录 |
+| GUI `--session-dir` | GUI 会话保存目录，建议显式传绝对路径 |
+
+CLI 默认会话目录 `.port_sessions/agent` 和默认 scratchpad 路径基于**进程当前
+目录**计算，不随 `--cwd` 自动迁移。业务幂等状态则保存在 Agent workspace 的
+`.port_sessions/business_functions/`。因此请保留第 6 节的 `cd` 步骤；GUI
+服务使用第 7 节明确设置的 `WorkingDirectory` 和 `--session-dir`。
+
+### 5.2 安装运行时 Agent 指令
 
 仓库中的 `agent_operation.md` 是运行时 Agent 指令模板。将其复制到
 Agent Workspace 根目录，命名为 `CLAUDE.md`，并把 Workspace 占位符替换为
@@ -206,11 +268,17 @@ grep -n '/home/atis/Documents/RAY/claw_agent_data/workspace' \
 ```
 
 Agent 从工作区中读取这份 `CLAUDE.md`。仓库根目录的 `CLAUDE.md` 用于
-开发 Harness 本身，不应复制给运行时 Agent。
+开发 Harness 本身，不应复制给运行时 Agent。`agent_integration.md` 是维护者的
+集成清单，也不需要复制到 workspace。
+
+`CLAUDE.md` 中的路径只向模型说明边界，不设置程序的工作目录；它必须与实际
+`AGENT_WORKSPACE` / `--cwd` 一致。不要启用 `--disable-claude-md`，否则不会自动
+加载这份运行指令。
 
 ## 6. 先进行命令行 Smoke Test
 
-使用服务用户加载受信任的配置并执行一次只读测试：
+本节验证模型调用和工作区指令，不提交业务任务。使用服务用户在 Bash 中加载
+自己维护的受信任 `.env`（`source` 会执行其中的 Shell 内容），再进行只读测试：
 
 ```bash
 set -a
@@ -244,10 +312,11 @@ OPENAI_BASE_URL
 OPENAI_MODEL
 服务器到模型 API 的网络
 API Key 的区域和权限
-AGENT_WORKSPACE 是否存在且可读
+AGENT_WORKSPACE 是否存在且服务用户可读写
 Workspace/CLAUDE.md 是否存在且占位符已替换
-VIDEO_ANALYSIS_API、VIDEO_PROCESSING_API 和 MODEL_TRAINING_API 是否配置正确
 ```
+
+业务 API 配置在下一节验收；它们缺失不应被误诊为模型连接失败。
 
 ### 6.1 验证业务 Functions
 
@@ -261,13 +330,20 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest \
   tests.test_model_training
 ```
 
-然后在测试 Backend 或 SSH tunnel 可用时，使用已知视频分别完成一次
-Video Analysis 和 Video Processing 的 submit/status/result 闭环。验收时检查：
+这些单元测试不能证明真实 Backend 已接通。测试 Backend 或 SSH tunnel 可用后，
+提供一个已存在的测试视频，完成 Analysis 和 Processing 的 submit/status/result
+闭环；再使用 Processing 生成的 ready manifest，在取得所需训练批准后完成
+Training 闭环。不要手写 dataset manifest 或模型元数据来代替业务结果。
+
+Backend 尚未就绪时，记录本节“未验收”，仍可继续启动 GUI；在本节通过前，
+只报告 Harness/模型可用。业务验收时检查：
 
 - Agent 可见九个业务 Functions，三个模块都可完成
   submit/status/result HTTP POC。
 - submit 后生成 `workspace/tasks/<module>/<task_id>.json`。
 - status 调用会更新对应 Task JSON。
+- `status="done"` 且 `result_ready=true` 后，同一轮调用对应 result Function；
+  不只报告任务完成而遗漏结果获取。
 - Processing result 完成后生成 `workspace/datasets/<dataset_id>.json`，函数只
   返回 Agent 可见的 `manifest_path`，不泄露 Backend 物理路径。
 - Model Training Submit 会先校验
@@ -316,7 +392,13 @@ ReadWritePaths=/home/atis/Documents/RAY/claw_agent_data
 WantedBy=multi-user.target
 ```
 
-`HOME` 指向单独的可写运行时目录，使 `ProtectHome=read-only` 不会阻止运行时组件保存必要状态。
+`HOME` 指向单独的运行时目录，`ReadWritePaths` 为运行数据目录提供可写范围。
+若自选的 workspace、会话或运行时 HOME 放在这个范围之外，需同步调整
+`ReadWritePaths` 并确认服务用户权限；仅修改 `.env` 不会改变 systemd 的文件系统
+限制。`WorkingDirectory`、代码目录和可写范围应在启动前存在。
+
+修改 unit 文件后执行 `daemon-reload` 再重启；只修改 `.env` 时重启服务即可读取
+新配置。路径变化时还要重新生成包含相同实际路径的 workspace `CLAUDE.md`。
 
 默认不添加 `--allow-shell`、`--unsafe` 或 `--allow-write`。只有在明确完成业务工具和权限
 设计后，才应按最小权限原则开放能力。
@@ -332,11 +414,15 @@ sudo systemctl status claw-code-agent
 
 ## 8. 验证运行状态
 
-本机检查：
+在服务器上检查 GUI 状态接口：
 
 ```bash
 curl --fail http://127.0.0.1:8765/api/state
 ```
+
+检查返回的 `cwd` 是否等于预期 Agent workspace、`session_directory` 是否为
+配置的会话目录。HTTP 成功只证明 GUI 状态接口可响应，不证明模型或 Backend
+可用；通过第 9 节访问 GUI 后再执行第 6 节的只读请求，并按第 6.1 节验证业务。
 
 查看日志：
 
@@ -386,14 +472,29 @@ http://127.0.0.1:8765
 
 ## 10. 更新部署
 
-更新前记录当前 commit：
+安排维护窗口，暂停新请求并记录运行中业务的 `task_id`。等待当前 Agent 回合
+结束再停止服务；停止 Harness 不会取消已经提交到 Backend 的任务。
+
+更新前记录当前 commit 和已安装依赖：
 
 ```bash
 cd /home/atis/Documents/RAY/claw_code_agent
 git rev-parse HEAD
+.venv/bin/pip freeze > /home/atis/Documents/RAY/claw_agent_data/requirements.before-update.txt
 ```
 
-拉取并重新安装：
+停止服务后，备份 `sessions/`、workspace 的 `CLAUDE.md`、`tasks/`、`datasets/`、
+`models/`、`.port_sessions/` 及需要保留的其他运行状态到独立备份位置；只备份已
+存在的目录。保留 `.env` 的受控备份和上述版本记录，备份也应限制访问权限。
+不要在有 Harness 写入的同时复制状态文件。
+
+```bash
+sudo systemctl stop claw-code-agent
+```
+
+完成备份后再继续。
+
+拉取并重新安装（任一步失败即停止，修复或回滚后再启动服务）：
 
 ```bash
 cd /home/atis/Documents/RAY/claw_code_agent
@@ -407,10 +508,10 @@ sed \
   agent_operation.md \
   > /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
 chmod 600 /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
-sudo systemctl restart claw-code-agent
+sudo systemctl start claw-code-agent
 ```
 
-更新后验证：
+更新后验证服务状态：
 
 ```bash
 sudo systemctl status claw-code-agent
@@ -418,14 +519,20 @@ curl --fail http://127.0.0.1:8765/api/state
 sudo journalctl -u claw-code-agent -n 100 --no-pager
 ```
 
+随后重复模型只读检查；用原 `task_id` 查询更新前运行中的业务任务，必要时获取
+结果，不要重新提交。若提交时响应丢失，应先通过已有幂等记录和 Backend 状态
+核对，不要假设没有提交成功。新版本应另外完成可控业务验收。
+
 不要在生产服务器上直接修改仓库文件。开发修改应先提交到 GitHub，再通过上述流程部署。
 
 ## 11. 回滚
 
-使用更新前记录的 commit：
+暂停新请求、记录任务 ID 并停止服务，然后使用更新前记录的 commit。
+以下命令中的 `<known-good-commit>` 必须替换成真实 commit：
 
 ```bash
 cd /home/atis/Documents/RAY/claw_code_agent
+sudo systemctl stop claw-code-agent
 git switch --detach <known-good-commit>
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install . --no-deps
@@ -434,10 +541,17 @@ sed \
   agent_operation.md \
   > /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
 chmod 600 /home/atis/Documents/RAY/claw_agent_data/workspace/CLAUDE.md
-sudo systemctl restart claw-code-agent
+sudo systemctl start claw-code-agent
 ```
 
-确认恢复后，可以继续保持该 commit，或在仓库中创建正式回滚提交后重新部署 `main`。
+按第 8 节和模型只读检查确认恢复，再用原 task ID 核对 Backend 状态。
+代码回滚不等于业务任务或数据回滚：不要直接用旧状态备份覆盖更新后新增的任务
+记录，否则可能丢失引用并重复提交。若新旧状态格式不兼容，应停止服务并制定
+迁移/恢复方案。
+
+`requirements.txt` 若使用版本范围，重新安装不保证还原旧依赖；需要精确恢复时，
+依据更新前保存的依赖清单重建并验证虚拟环境。确认恢复后，可以保持该 commit，
+或在仓库中创建正式回滚提交后重新部署 `main`。
 
 ## 12. 自托管 Qwen（可选）
 
@@ -482,16 +596,16 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 
 ## 14. 部署验收清单
 
+### Harness 与模型验收
+
 - [ ] Python 版本不低于 3.10。
 - [ ] 服务由 `atis` 非 root 用户运行。
-- [ ] API Key 只存在于 Harness 根目录的 `.env`。
+- [ ] API Key 通过受控 `.env` 注入，未写入代码或 Agent 指令。
 - [ ] `.env` 所有者是 `atis`，权限为 `600`。
 - [ ] `.env` 已被 `.gitignore` 忽略，没有进入 Git。
-- [ ] `AGENT_WORKSPACE`、`VIDEO_ANALYSIS_API`、`VIDEO_PROCESSING_API` 和
-      `MODEL_TRAINING_API`
-      已在 `.env` 中设置。
-- [ ] Workspace 的 `uploads/`、`datasets/`、`models/` 和三类
-      `tasks/` 目录已创建。
+- [ ] `AGENT_WORKSPACE` 和模型连接配置已在 `.env` 中设置。
+- [ ] Workspace 根目录存在且服务用户可读写。
+- [ ] `--cwd` / `AGENT_WORKSPACE` 指向预期根目录；自动生成目录无需预创建。
 - [ ] `workspace/CLAUDE.md` 已从 `agent_operation.md` 生成，包含实际
       Workspace 路径且没有遗留占位符。
 - [ ] systemd 的 `HOME` 指向可写的 `runtime-home`。
@@ -499,7 +613,13 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - [ ] 默认未启用 Shell、Unsafe 和通用文件写入权限；只允许
       业务 Functions 实现的授权持久化。
 - [ ] systemd 服务可以自动启动和失败重启。
-- [ ] `/api/state` 健康检查通过。
+- [ ] `/api/state` 可响应，返回的工作区与会话路径正确。
+- [ ] 模型只读请求成功，运行时指令已加载。
+
+### 业务接入验收（Backend 就绪后）
+
+- [ ] `VIDEO_ANALYSIS_API`、`VIDEO_PROCESSING_API`、`MODEL_TRAINING_API` 指向真实 Backend。
+- [ ] 原始测试视频已放入授权目录。
 - [ ] 九个业务 Functions 可见，三个模块均已完成至少一次
       可控的 submit/status/result 验收。
 - [ ] Task JSON 会创建并更新，Processing result 会保存 public
@@ -507,6 +627,8 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - [ ] Model Training Submit 会先校验 ready dataset manifest，然后只发送
       逻辑 JSON 引用；Status/Result 可查询，会更新 Training Task JSON
       并保存 public model metadata。
+### 运维验收
+
 - [ ] Journal 日志中没有 API Key。
 - [ ] Agent session 中没有 API Key。
 - [ ] 已记录当前部署 commit。
