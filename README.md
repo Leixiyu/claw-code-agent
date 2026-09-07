@@ -94,10 +94,6 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 > library. The local web GUI uses FastAPI, Uvicorn, and Pydantic, while the GUI
 > test suite additionally uses HTTPX.
 
-<p align="center">
-  <img src="images/demo_2.gif" alt="Claw Code Agent demo" width="900" />
-</p>
-
 ---
 
 ## ✨ Key Features
@@ -235,7 +231,6 @@ claw-code-agent/
 ├── harbor_adapter.py             # Harbor benchmark integration adapter
 ├── install_dockor.sh             # Rootless Docker setup helper
 ├── .gitignore
-├── images/                       # README demo animations
 ├── benchmarks/                   # Standard and local Agent evaluation suites
 │   ├── README.md                 # Benchmark setup and command reference
 │   ├── run.py                    # Local task benchmark entry point
