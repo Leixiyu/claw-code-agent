@@ -10,7 +10,7 @@
 - 4090 POC 使用现有非 root 用户 `atis`
 - Harness 路径为 `/home/atis/Documents/RAY/claw-code-agent`
 - 运行数据存放在相邻的 `/home/atis/Documents/RAY/agent_workspace`
-- GUI 只监听 `127.0.0.1`
+- Demo GUI 监听 `0.0.0.0:8765`，通过公网 `http://183.11.226.132:8765` 访问
 
 当前 Harness 是 Agent runtime 和本地管理 GUI。Video Analysis 和 Video
 Processing 的 submit/status/result 六个 Functions 已实现 HTTP POC，Model
@@ -410,7 +410,7 @@ EnvironmentFile=/home/atis/Documents/RAY/claw-code-agent/.env
 Environment=HOME=/home/atis/Documents/RAY/agent_workspace/runtime-home
 
 ExecStart=/home/atis/Documents/RAY/claw-code-agent/.venv/bin/claw-code-gui \
-  --host 127.0.0.1 \
+  --host 0.0.0.0 \
   --port 8765 \
   --no-browser \
   --session-dir /home/atis/Documents/RAY/agent_workspace/sessions
@@ -476,38 +476,97 @@ sudo journalctl -u claw-code-agent -f
 ss -lntp | grep 8765
 ```
 
-正常情况下只能看到 `127.0.0.1:8765`，不应监听公网地址。
+正常情况下应看到 `0.0.0.0:8765`。如果仍为 `127.0.0.1:8765`，按第 9.1 节修改并重启服务。
 
-## 9. 安全访问 GUI
+## 9. Demo 公网访问与本地 curl
 
-当前 GUI 没有适合公网暴露的完整身份认证和租户授权。不要直接使用：
+本文采用公网直连的 Demo 部署：服务器为 `183.11.226.132`，端口为 TCP 8765，
+无需 SSH 隧道。当前 GUI 尚无完整身份认证，开放的是包含状态、聊天和配置接口
+的整个 GUI 服务；此方案用于临时测试。
 
-```text
---host 0.0.0.0
-```
+### 9.1 在服务器上修改监听地址
 
-推荐从本地电脑建立 SSH 隧道：
+编辑已有服务文件：
 
 ```bash
-ssh -L 8765:127.0.0.1:8765 your-user@your-server
+sudo nano /etc/systemd/system/claw-code-agent.service
 ```
 
-然后在本地浏览器访问：
+保留当前已验证可用的 Conda/venv `ExecStart` 可执行文件路径，只将其参数
+`--host 127.0.0.1` 改成 `--host 0.0.0.0`，端口继续使用 `--port 8765`。
+不要把已有的 Conda 路径改回文档中的 `.venv` 示例路径。
 
-```text
-http://127.0.0.1:8765
+保存后在服务器执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart claw-code-agent
+sudo systemctl status claw-code-agent --no-pager -l
+ss -lntp | grep 8765
+curl --fail --show-error --max-time 10 http://127.0.0.1:8765/api/state
 ```
 
-如果未来必须通过域名访问，应在反向代理层增加：
+先确认监听 `0.0.0.0:8765`，且服务器本机 GET 请求能返回 JSON。
 
-- HTTPS
-- 用户认证
-- IP 或 VPN 限制
-- 请求大小限制
-- 访问日志脱敏
-- API 限流
+### 9.2 放行公网 TCP 8765
 
-在这些能力完成前不要公开 GUI。
+根据服务器实际网络配置处理，不需要重复启用或安装防火墙：
+
+- 如果使用 UFW，执行 `sudo ufw status` 检查；处于 active 状态时执行：
+
+  ```bash
+  sudo ufw allow 8765/tcp
+  ```
+
+- 如果服务器有云安全组或上游防火墙，增加 TCP 8765 的入站放行规则。
+- 如果 `183.11.226.132` 是路由器/NAT 的公网地址，在网关配置 TCP 8765
+  转发到这台服务器的内网 IP 的 8765 端口。SSH 能连接并不代表 8765 已转发。
+
+### 9.3 在本地电脑 curl 状态接口
+
+在**本地电脑**终端直接执行，无需 Conda、SSH 隧道或模型 API Key：
+
+```bash
+curl --fail --show-error --max-time 10 http://183.11.226.132:8765/api/state
+```
+
+检查 JSON 中的 `cwd` 是否为 `/home/atis/Documents/RAY/agent_workspace`，
+`session_directory` 是否为该目录下的 `sessions`，以及 `model`、`base_url`
+是否符合服务器配置。这个 GET 请求只读取 GUI 状态，不调用模型。
+
+浏览器也可以直接访问 [http://183.11.226.132:8765](http://183.11.226.132:8765)。
+`0.0.0.0` 是服务端监听地址；本地 curl 和浏览器应使用上述公网 IP。
+
+### 9.4 在本地电脑提交 Agent 请求
+
+```bash
+curl --fail --show-error http://183.11.226.132:8765/api/chat \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"prompt":"只检查 Agent Workspace 并简要说明可见目录，不要修改任何内容。"}'
+```
+
+该 POST 会调用服务器配置的模型、消耗模型额度，并保存会话。接口等待本轮执行
+结束后返回 JSON，不是 SSE 流。检查 `final_output` 和 `stop_reason`；即使
+HTTP 成功，`stop_reason="backend_error"` 也表示 Agent 执行失败。
+
+### 9.5 连接问题排查
+
+| 现象 | 检查位置 |
+| --- | --- |
+| 服务器本机 curl 失败 | 服务状态、监听端口和 Journal 日志 |
+| 本机可访问，公网请求超时 | 防火墙、安全组和 NAT 端口转发 |
+| 仍只监听 `127.0.0.1` | unit 中的 `--host`，是否已 daemon-reload 并重启 |
+| 公网 GET 正常，POST 返回 Agent 错误 | 模型/API 配置、工具调用结果和服务日志 |
+
+在服务器查看日志：
+
+```bash
+sudo journalctl -u claw-code-agent -n 100 --no-pager
+```
+
+测试结束后可执行 `sudo systemctl stop claw-code-agent` 停止服务；若需继续保留
+服务但结束公网访问，将监听地址改回 `127.0.0.1`，重新加载并重启，同时撤销
+本次添加的端口放行/转发规则。
 
 ## 10. 更新部署
 
@@ -650,7 +709,7 @@ Harness 和模型服务应使用不同的 systemd service 或容器。不要让�
 - [ ] `agent_workspace/CLAUDE.md` 已从 `agent_operation.md` 生成，包含实际
       Workspace 路径且没有遗留占位符。
 - [ ] systemd 的 `HOME` 指向可写的 `runtime-home`。
-- [ ] GUI 只监听 `127.0.0.1`。
+- [ ] Demo GUI 监听 `0.0.0.0:8765`，本地电脑可通过公网 IP 访问 `/api/state`。
 - [ ] 默认未启用 Shell、Unsafe 和通用文件写入权限；只允许
       业务 Functions 实现的授权持久化。
 - [ ] systemd 服务可以自动启动和失败重启。
