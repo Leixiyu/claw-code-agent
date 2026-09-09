@@ -132,6 +132,7 @@ class ModelTrainingTests(unittest.TestCase):
                 'arguments',
                 'workspace_root',
                 'timeout_seconds',
+                'operation_scope',
             },
             get_model_training_status: {
                 'arguments',
@@ -162,7 +163,7 @@ class ModelTrainingTests(unittest.TestCase):
 
         self.assertEqual(
             parameters['required'],
-            ['scenario', 'dataset_ref', 'idempotency_key'],
+            ['scenario', 'dataset_ref'],
         )
         self.assertNotIn('path', parameters['properties'])
 
@@ -233,7 +234,6 @@ class ModelTrainingTests(unittest.TestCase):
                         'json': {
                             'scenario': 'fire_inspection',
                             'dataset_ref': 'fire-inspect-01',
-                            'idempotency_key': 'training-fire-inspect-01-001',
                         }
                     },
                 )

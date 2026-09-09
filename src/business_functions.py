@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -10,6 +11,7 @@ from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from uuid import uuid4
 
 import httpx
 
@@ -519,6 +521,92 @@ def _write_registry(
         except OSError:
             pass
         raise error_type(f'failed to persist {operation} idempotency state: {exc}') from exc
+
+
+def _reserve_submission(
+    arguments: dict[str, Any],
+    registry: dict[str, Any],
+    request: dict[str, Any],
+    *,
+    workspace_root: Path,
+    operation_scope: str | None,
+    endpoint: str,
+    registry_file: str,
+    operation: str,
+    error_type: type[RuntimeError],
+) -> tuple[str, dict[str, Any] | None]:
+    """Reserve an operation before network I/O. Caller holds the registry lock.
+
+    Automatic keys belong to a session, endpoint and input fingerprint. A repeat
+    references a completed submission's task ID, so retrying the repeat itself
+    resolves to the same operation. Legacy application-supplied keys still work.
+    """
+    entries = registry.setdefault('entries', {})
+    repeat_of = arguments.get('repeat_of_task_id')
+    if repeat_of is not None and (not isinstance(repeat_of, str) or not repeat_of):
+        raise error_type('repeat_of_task_id must be a non-empty task ID')
+    if 'idempotency_key' in arguments:
+        if repeat_of is not None:
+            raise error_type('do not combine idempotency_key and repeat_of_task_id')
+        key = _require_string(arguments, 'idempotency_key', error_type=error_type)
+    else:
+        if not operation_scope:
+            raise error_type('automatic idempotency requires a Harness operation_scope')
+        identity = json.dumps(
+            [operation_scope, endpoint, request], sort_keys=True, separators=(',', ':')
+        )
+        base = hashlib.sha256(identity.encode()).hexdigest()
+        operations = registry.setdefault('automatic_operations', {})
+        selector = base
+        if repeat_of is not None:
+            parent = next(
+                (entry for entry in entries.values()
+                 if entry.get('response', {}).get('task_id') == repeat_of
+                 and entry.get('scope') == operation_scope
+                 and entry.get('endpoint') == endpoint
+                 and entry.get('request') == request),
+                None,
+            )
+            if parent is None:
+                raise error_type(
+                    'repeat_of_task_id must reference a known submission in this '
+                    'session with the same inputs and endpoint'
+                )
+            selector = hashlib.sha256(
+                json.dumps([base, repeat_of]).encode()
+            ).hexdigest()
+        key = operations.get(selector)
+        if key is None:
+            key = f'{operation}-{uuid4().hex}'
+            operations[selector] = key
+            # Ordinary follow-up submissions reuse the most recently requested run.
+            operations[base] = key
+    existing = entries.get(key)
+    if existing is not None:
+        if existing.get('request') != request:
+            raise error_type(
+                f'idempotency_key has already been used for a different {operation} request'
+            )
+        if existing.get('endpoint', endpoint) != endpoint:
+            raise error_type('idempotency_key has already been used for a different endpoint')
+        if 'response' not in existing:
+            raise error_type(
+                f'{operation} submission outcome is unknown; the prior request may '
+                'have reached the backend. Do not resubmit automatically. Reconcile '
+                'with the backend before starting another operation.'
+            )
+        return key, existing
+    entries[key] = {
+        'request': request,
+        'scope': operation_scope,
+        'endpoint': endpoint,
+        'state': 'submitting',
+    }
+    _write_registry(
+        workspace_root, registry, registry_file=registry_file,
+        operation=operation, error_type=error_type,
+    )
+    return key, None
 
 
 def _render_analysis_submit_result(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -1170,6 +1258,7 @@ def submit_video_analysis(
     *,
     workspace_root: Path,
     timeout_seconds: float,
+    operation_scope: str | None = None,
     base_url: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Submit a video reference to the asynchronous analysis pipeline.
@@ -1217,8 +1306,10 @@ def submit_video_analysis(
             'path': raw_path,
         }
 
-    idempotency_key = _require_string(arguments, 'idempotency_key')
-    _validate_idempotency_key(idempotency_key, video_name, scenario)
+    if 'idempotency_key' in arguments:
+        _validate_idempotency_key(
+            _require_string(arguments, 'idempotency_key'), video_name, scenario
+        )
 
     endpoint = _predict_endpoint(base_url or os.environ.get(VIDEO_ANALYSIS_API_ENV, ''))
     request_fingerprint = {
@@ -1228,12 +1319,13 @@ def submit_video_analysis(
 
     with _locked_registry(workspace_root) as registry:
         entries = registry.setdefault('entries', {})
-        existing = entries.get(idempotency_key)
+        idempotency_key, existing = _reserve_submission(
+            arguments, registry, request_fingerprint,
+            workspace_root=workspace_root, operation_scope=operation_scope,
+            endpoint=endpoint, registry_file=_ANALYSIS_IDEMPOTENCY_FILE,
+            operation='video-analysis', error_type=VideoAnalysisError,
+        )
         if existing is not None:
-            if existing.get('request') != request_fingerprint:
-                raise VideoAnalysisError(
-                    'idempotency_key has already been used for a different video-analysis request'
-                )
             response_payload = dict(existing['response'])
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
@@ -1264,10 +1356,10 @@ def submit_video_analysis(
             'idempotency_key': idempotency_key,
             'idempotency_replayed': False,
         }
-        entries[idempotency_key] = {
-            'request': request_fingerprint,
+        entries[idempotency_key].update({
             'response': response_payload,
-        }
+            'state': 'submitted',
+        })
         _write_registry(workspace_root, registry)
 
     _persist_task_submission(
@@ -1285,6 +1377,7 @@ def submit_video_processing(
     *,
     workspace_root: Path,
     timeout_seconds: float,
+    operation_scope: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Upload raw Harness-hosted videos for labeling and dataset preparation."""
     scenario = _require_string(
@@ -1323,11 +1416,6 @@ def submit_video_processing(
             }
         )
 
-    idempotency_key = _require_string(
-        arguments,
-        'idempotency_key',
-        error_type=VideoProcessingError,
-    )
     endpoint = _processing_endpoint(
         os.environ.get(VIDEO_PROCESSING_API_ENV, '')
     )
@@ -1345,13 +1433,13 @@ def submit_video_processing(
         error_type=VideoProcessingError,
     ) as registry:
         entries = registry.setdefault('entries', {})
-        existing = entries.get(idempotency_key)
+        idempotency_key, existing = _reserve_submission(
+            arguments, registry, request_fingerprint,
+            workspace_root=workspace_root, operation_scope=operation_scope,
+            endpoint=endpoint, registry_file=_PROCESSING_IDEMPOTENCY_FILE,
+            operation='video-processing', error_type=VideoProcessingError,
+        )
         if existing is not None:
-            if existing.get('request') != request_fingerprint:
-                raise VideoProcessingError(
-                    'idempotency_key has already been used for a different '
-                    'video-processing request'
-                )
             response_payload = dict(existing['response'])
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
@@ -1373,10 +1461,10 @@ def submit_video_processing(
             'idempotency_key': idempotency_key,
             'idempotency_replayed': False,
         }
-        entries[idempotency_key] = {
-            'request': request_fingerprint,
+        entries[idempotency_key].update({
             'response': response_payload,
-        }
+            'state': 'submitted',
+        })
         _write_registry(
             workspace_root,
             registry,
@@ -1400,6 +1488,7 @@ def submit_model_training(
     *,
     workspace_root: Path,
     timeout_seconds: float,
+    operation_scope: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Submit model training using a processed dataset reference."""
     scenario = _require_string(
@@ -1417,11 +1506,6 @@ def submit_model_training(
         'dataset_ref',
         error_type=ModelTrainingError,
     )
-    idempotency_key = _require_string(
-        arguments,
-        'idempotency_key',
-        error_type=ModelTrainingError,
-    )
     _validate_ready_dataset_manifest(
         workspace_root,
         dataset_ref,
@@ -1433,7 +1517,6 @@ def submit_model_training(
     request_payload = {
         'scenario': scenario,
         'dataset_ref': dataset_ref,
-        'idempotency_key': idempotency_key,
     }
     request_fingerprint = {
         'scenario': scenario,
@@ -1449,13 +1532,13 @@ def submit_model_training(
         error_type=ModelTrainingError,
     ) as registry:
         entries = registry.setdefault('entries', {})
-        existing = entries.get(idempotency_key)
+        idempotency_key, existing = _reserve_submission(
+            arguments, registry, request_fingerprint,
+            workspace_root=workspace_root, operation_scope=operation_scope,
+            endpoint=endpoint, registry_file=_TRAINING_IDEMPOTENCY_FILE,
+            operation='model-training', error_type=ModelTrainingError,
+        )
         if existing is not None:
-            if existing.get('request') != request_fingerprint:
-                raise ModelTrainingError(
-                    'idempotency_key has already been used for a different '
-                    'model-training request'
-                )
             response_payload = dict(existing['response'])
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
@@ -1481,10 +1564,10 @@ def submit_model_training(
             'idempotency_key': idempotency_key,
             'idempotency_replayed': False,
         }
-        entries[idempotency_key] = {
-            'request': request_fingerprint,
+        entries[idempotency_key].update({
             'response': response_payload,
-        }
+            'state': 'submitted',
+        })
         _write_registry(
             workspace_root,
             registry,

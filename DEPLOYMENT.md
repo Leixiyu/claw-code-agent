@@ -606,7 +606,8 @@ sed \
   agent_operation.md \
   > /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
 chmod 600 /home/atis/Documents/RAY/agent_workspace/CLAUDE.md
-sudo systemctl start claw-code-agent
+sudo systemctl daemon-reload
+sudo systemctl restart claw-code-agent
 ```
 
 更新后验证服务状态：
@@ -622,6 +623,22 @@ sudo journalctl -u claw-code-agent -n 100 --no-pager
 核对，不要假设没有提交成功。新版本应另外完成可控业务验收。
 
 不要在生产服务器上直接修改仓库文件。开发修改应先提交到 GitHub，再通过上述流程部署。
+
+### 业务提交的自动去重
+
+`idempotency_key` 仅用于 Harness 内部防重复，用户无需填写。
+视频处理、模型训练、视频分析的所有 Business API 请求均不携带该参数。
+训练请求 JSON 只包含 `scenario` 和 `dataset_ref`。
+
+Harness 在 `.port_sessions/business_functions/` 中持久化操作记录：
+
+- 同一会话、同一接口和相同输入重复提交时，复用已有任务；恢复会话请使用原 session ID。
+- 用户明确要求重做时，Agent 用上一次的任务 ID 作为 `repeat_of_task_id`，由 Harness 创建新操作。
+  重复调用同一重做请求仍复用新任务；该参数也不会传给 Business API。
+- 请求发出前先保存记录。如果提交结果不确定，停止自动重试，先核查后端是否已创建任务。
+  不要通过新会话绕过此保护。本地去重无法保证后端恰好执行一次。
+
+更新后同步 Workspace `CLAUDE.md` 中的幂等规则，重启 Harness，并新建会话验证。
 
 ## 11. 回滚
 

@@ -460,6 +460,7 @@ class LocalCodingAgent:
         session.append_user(effective_prompt)
         self.last_session = session
         self.active_session_id = session_id
+        self.tool_context = replace(self.tool_context, business_session_id=session_id)
         tool_specs = [tool.to_openai_tool() for tool in self.tool_registry.values()]
         starting_usage = UsageStats()
         starting_cost_usd = 0.0
@@ -4314,6 +4315,10 @@ class LocalCodingAgent:
             workflow_runtime=self.workflow_runtime,
             worktree_runtime=self.worktree_runtime,
         )
+        if self.active_session_id:
+            self.tool_context = replace(
+                self.tool_context, business_session_id=self.active_session_id,
+            )
 
     def _apply_plugin_before_prompt_hooks(self, prompt: str) -> str:
         if self.plugin_runtime is None:

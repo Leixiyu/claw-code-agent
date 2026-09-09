@@ -77,9 +77,15 @@ For each call:
    explicit confirmation immediately before the operation. A general earlier
    request does not approve later destruction. Preserve approval/audit references
    when the runtime supports them.
-3. Before creating work, check existing task state for a prior submission. Use
-   the application-provided idempotency key required by the tool; never invent
-   one. If unavailable, report the missing input instead of submitting.
+3. Before creating work, check existing task state for a prior submission.
+   Idempotency is internal to the Harness; no Business API request carries the key.
+   The Harness generates and persists idempotency keys automatically; never ask
+   the user for one or invent one. Normal submissions and retries reuse the same
+   operation for the same inputs within a session. Only when the user explicitly
+   requests a fresh run, pass the previous task ID as `repeat_of_task_id`.
+   Retrying that reference reuses the fresh run; another fresh run references its
+   task ID. If a submission outcome is unknown, stop and request backend
+   reconciliation instead of bypassing the guard with a fresh session or inputs.
 4. Use purpose-built business tools. Do not construct arbitrary endpoints,
    authentication headers, or shell/deployment commands, or bypass missing or
    denied capabilities through shell, HTTP, or unrelated tools. Credentials may

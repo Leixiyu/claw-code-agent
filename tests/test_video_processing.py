@@ -113,6 +113,7 @@ class VideoProcessingTests(unittest.TestCase):
                 'arguments',
                 'workspace_root',
                 'timeout_seconds',
+                'operation_scope',
             },
             get_video_processing_status: {
                 'arguments',
@@ -140,7 +141,7 @@ class VideoProcessingTests(unittest.TestCase):
 
         self.assertEqual(
             parameters['required'],
-            ['scenario', 'raw_video_refs', 'idempotency_key'],
+            ['scenario', 'raw_video_refs'],
         )
         raw_video_refs = parameters['properties']['raw_video_refs']
         self.assertEqual(raw_video_refs['type'], 'array')

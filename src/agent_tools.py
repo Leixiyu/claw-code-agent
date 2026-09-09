@@ -13,6 +13,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Union
+from uuid import uuid4
 
 from .agent_types import AgentPermissions, AgentRuntimeConfig, ToolExecutionResult
 from .session_env_vars import get_session_env_vars
@@ -67,6 +68,7 @@ class ToolExecutionContext:
     # only the field references are frozen, not what they point to.
     edit_history: dict[str, int] = field(default_factory=dict)
     self_authored_paths: set[str] = field(default_factory=set)
+    business_session_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 ToolHandler = Callable[
@@ -221,7 +223,7 @@ def default_tool_registry() -> dict[str, AgentTool]:
                 'local_file references a path on the video-analysis server; '
                 'upload_file uploads a path from the Agent Harness server; '
                 'cos_file passes a COS object path to the video-analysis server. '
-                'The idempotency key must be created by the application, not invented by the LLM.'
+                'The Harness manages idempotency automatically; never ask the user for a key.'
             ),
             parameters={
                 'type': 'object',
@@ -254,16 +256,17 @@ def default_tool_registry() -> dict[str, AgentTool]:
                         'required': ['type', 'path'],
                         'additionalProperties': False,
                     },
-                    'idempotency_key': {
+                    'repeat_of_task_id': {
                         'type': 'string',
                         'description': (
-                            'Application-created key in the format '
-                            '<video-name>-<scenario>-YYMMDD-HHMMSS, for example '
-                            'test-fire_inspection-260803-112423.'
+                            'Only when the user explicitly requests a fresh run of the '
+                            'same inputs: the previous submission task ID from this session. '
+                            'Omit for normal submissions and retries. Repeating this same '
+                            'reference reuses the new run; use its task ID for a further run.'
                         ),
                     },
                 },
-                'required': ['scenario', 'video_ref', 'idempotency_key'],
+                'required': ['scenario', 'video_ref'],
                 'additionalProperties': False,
             },
             handler=_submit_video_analysis,
@@ -313,8 +316,8 @@ def default_tool_registry() -> dict[str, AgentTool]:
                 'Submit raw videos for asynchronous labeling and dataset preparation. '
                 'Each raw_video_refs item must identify a video file available on the '
                 'Agent Harness server. The Harness uploads those files to the configured '
-                'video-processing API. The idempotency key must be created by the '
-                'application, not invented by the LLM.'
+                'video-processing API. The Harness manages idempotency automatically; '
+                'never ask the user for a key.'
             ),
             parameters={
                 'type': 'object',
@@ -334,15 +337,17 @@ def default_tool_registry() -> dict[str, AgentTool]:
                             'workspace.'
                         ),
                     },
-                    'idempotency_key': {
+                    'repeat_of_task_id': {
                         'type': 'string',
                         'description': (
-                            'Application-created idempotency key; it must not be invented '
-                            'by the LLM.'
+                            'Only when the user explicitly requests a fresh run of the '
+                            'same inputs: the previous submission task ID from this session. '
+                            'Omit for normal submissions and retries. Repeating this same '
+                            'reference reuses the new run; use its task ID for a further run.'
                         ),
                     },
                 },
-                'required': ['scenario', 'raw_video_refs', 'idempotency_key'],
+                'required': ['scenario', 'raw_video_refs'],
                 'additionalProperties': False,
             },
             handler=_submit_video_processing,
@@ -393,7 +398,8 @@ def default_tool_registry() -> dict[str, AgentTool]:
                 'AGENT_WORKSPACE/datasets/<dataset_ref>.json from a completed '
                 'video-processing result. The Business Backend owns the dataset and base '
                 'model; the Harness sends only logical JSON references and does not upload '
-                'training data or model files.'
+                'training data or model files. The Harness manages idempotency '
+                'automatically; never ask the user for a key.'
             ),
             parameters={
                 'type': 'object',
@@ -411,15 +417,17 @@ def default_tool_registry() -> dict[str, AgentTool]:
                             'filesystem path.'
                         ),
                     },
-                    'idempotency_key': {
+                    'repeat_of_task_id': {
                         'type': 'string',
                         'description': (
-                            'Application-created idempotency key; it must not be invented '
-                            'by the LLM.'
+                            'Only when the user explicitly requests a fresh run of the '
+                            'same inputs: the previous submission task ID from this session. '
+                            'Omit for normal submissions and retries. Repeating this same '
+                            'reference reuses the new run; use its task ID for a further run.'
                         ),
                     },
                 },
-                'required': ['scenario', 'dataset_ref', 'idempotency_key'],
+                'required': ['scenario', 'dataset_ref'],
                 'additionalProperties': False,
             },
             handler=_submit_model_training,
@@ -1508,6 +1516,7 @@ def _submit_video_analysis(
     try:
         return submit_video_analysis(
             arguments,
+            operation_scope=context.business_session_id,
             workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
@@ -1556,6 +1565,7 @@ def _submit_video_processing(
     try:
         return submit_video_processing(
             arguments,
+            operation_scope=context.business_session_id,
             workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
@@ -1604,6 +1614,7 @@ def _submit_model_training(
     try:
         return submit_model_training(
             arguments,
+            operation_scope=context.business_session_id,
             workspace_root=context.root,
             timeout_seconds=context.command_timeout_seconds,
         )
