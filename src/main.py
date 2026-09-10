@@ -212,6 +212,11 @@ def _parse_tools_flag(raw_tools: str | None) -> tuple[str, ...] | None:
     return tuple(item.strip() for item in cleaned.split(',') if item.strip())
 
 
+def _print_tool_progress(event: dict) -> None:
+    # Keep stdout/final output compatible with scripts; flush even when redirected.
+    print(f"[进度] {event['message']}", file=sys.stderr, flush=True)
+
+
 def _build_agent(args: argparse.Namespace) -> LocalCodingAgent:
     return LocalCodingAgent(
         model_config=_build_model_config(args),
@@ -219,6 +224,7 @@ def _build_agent(args: argparse.Namespace) -> LocalCodingAgent:
         custom_system_prompt=args.system_prompt,
         append_system_prompt=args.append_system_prompt,
         override_system_prompt=args.override_system_prompt,
+        on_tool_start=_print_tool_progress,
     )
 
 
@@ -508,6 +514,7 @@ def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, St
     agent = LocalCodingAgent(
         model_config=model_config,
         runtime_config=runtime_config,
+        on_tool_start=_print_tool_progress,
     )
     return agent, stored_session
 

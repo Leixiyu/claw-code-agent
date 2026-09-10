@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from .account_runtime import AccountRuntime
@@ -77,6 +78,7 @@ from .session_store import (
     usage_from_payload,
 )
 from .token_budget import calculate_token_budget, format_token_budget
+from .tool_progress import tool_progress_message
 from .builtin_agents import (
     AgentDefinition,
     ALL_AGENT_DISALLOWED_TOOLS,
@@ -127,6 +129,7 @@ class LocalCodingAgent:
     team_runtime: TeamRuntime | None = None
     workflow_runtime: WorkflowRuntime | None = None
     worktree_runtime: WorktreeRuntime | None = None
+    on_tool_start: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
     last_session: AgentSessionState | None = field(default=None, init=False, repr=False)
     last_run_result: AgentRunResult | None = field(default=None, init=False, repr=False)
     cumulative_usage: UsageStats = field(default_factory=UsageStats, init=False, repr=False)
@@ -949,6 +952,17 @@ class LocalCodingAgent:
                             'message': policy_block_message,
                         }
                     )
+                if tool_result is None and self.on_tool_start is not None:
+                    # UI activity is not model context and must not break execution.
+                    try:
+                        self.on_tool_start({
+                            'type': 'tool_start',
+                            'tool_name': tool_call.name,
+                            'tool_call_id': tool_call.id,
+                            'message': tool_progress_message(tool_call.name),
+                        })
+                    except Exception:
+                        logging.getLogger(__name__).warning('Tool progress delivery failed')
                 if tool_call.name in ('Agent', 'delegate_agent'):
                     if tool_result is None:
                         tool_result = self._execute_delegate_agent(tool_call.arguments)
@@ -2410,6 +2424,7 @@ class LocalCodingAgent:
                     managed_group_id=group_id,
                     managed_child_index=index,
                     managed_label=subtask_label,
+                    on_tool_start=self.on_tool_start,
                 )
                 if group_id is not None and child_agent.managed_agent_id is not None:
                     self.agent_manager.register_group_child(

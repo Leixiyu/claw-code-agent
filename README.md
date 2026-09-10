@@ -242,6 +242,7 @@ claw-code-agent/
 │   ├── main.py                   # CLI entry point & argument parsing
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
+│   ├── tool_progress.py          # User-facing activity labels for each tool
 │   ├── business_functions.py     # Analysis/Processing/Training business Functions
 │   ├── agent_prompting.py        # System prompt assembly
 │   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
@@ -813,6 +814,7 @@ Every budget flag above is also editable at runtime through the **Budgets & limi
 The GUI surfaces:
 
 - multi-turn chat with tool-call cards (collapsible JSON args + results)
+- live tool activity messages before execution, without exposing tool arguments or model reasoning
 - saved sessions sidebar with one-click resume
 - slash command and skill pickers (`/` and `★` buttons, or `Cmd/Ctrl+K`)
 - live settings panel (model, base URL, working dir, permissions)
@@ -821,12 +823,40 @@ The GUI surfaces:
 - runtime knobs: temperature, timeout, streaming toggle, max turns
 - a **Tasks** tab in the topbar — list / create / start / complete / cancel against `.port_sessions/task_runtime.json`
 
+### Live tool activity
+
+Tool labels are maintained in `src/tool_progress.py` (for example, `list_dir` →
+“正在查看目录…”). CLI agent runs, chat, and resume print these labels immediately
+to **stderr**, with flushing; stdout's final answer, usage, and session output
+remain unchanged. Background workers write the labels to their existing logs.
+This works independently of the `--stream` model-response setting.
+
+The GUI and `demo_script.py` use `POST /api/chat/stream`, which accepts the same
+request as `/api/chat` and returns newline-delimited JSON:
+
+```json
+{"type":"tool_start","tool_name":"list_dir","tool_call_id":"call_1","message":"正在查看目录…"}
+{"type":"result","data":{"final_output":"..."}}
+```
+
+The final `data` contains the **full, unchanged** `/api/chat` response (abbreviated
+above). Clients should also handle `heartbeat` events and terminal `error` events.
+The existing `/api/chat` remains a single JSON response for compatible clients;
+they must opt into the stream endpoint and read lines incrementally to see progress.
+Stream errors after HTTP headers are sent are reported as events, not HTTP status
+changes. Disconnecting does not cancel business operations; check saved sessions
+before retrying. Reverse proxies must allow streaming without response buffering.
+
+Activity labels describe tool attempts, not business completion or a percentage.
+They are not inserted into model prompts/transcripts. While the model is deciding
+what to do, or a long tool is still running, no new tool label is emitted.
+
 ### Paste large content
 
 Paste anything ≥500 characters into the composer (a logfile, a stack trace, an entire file) and the GUI replaces it with a short reference like `[Pasted text #1 +42 lines]`, plus a chip above the textarea showing `📎 [Pasted text #1] · 42 lines · 1894 chars · ✕`.
 
 - The reference stays editable — type around it, delete it, or duplicate it; whatever survives at send-time is what gets expanded.
-- The full content is held in the browser only and shipped with the next `/api/chat` request as `pasted_contents`.
+- The full content is held in the browser only and shipped with the next `/api/chat/stream` request as `pasted_contents`.
 - The server re-splices the original text back in before the agent runs, so the model sees the full payload — never the placeholder.
 - The chip's `✕` button drops both the content stash and any inline ref so it can't accidentally come along.
 - The stash clears after every successful send and when you click `+ New chat`.

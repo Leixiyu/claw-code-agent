@@ -10,12 +10,17 @@ hit the network, so the chat endpoint can be exercised end-to-end against
 from __future__ import annotations
 
 import tempfile
+import json
+import asyncio
 import unittest
 from pathlib import Path
+from threading import Event
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from src.gui.server import AgentState, create_app
+from src.gui.server import AgentState, ChatRequest, create_app
+from src.agent_types import AgentRunResult
 
 
 def _build_client(tmp: Path) -> tuple[TestClient, AgentState]:
@@ -32,6 +37,89 @@ def _build_client(tmp: Path) -> tuple[TestClient, AgentState]:
 
 
 class GuiServerTests(unittest.TestCase):
+    def test_chat_stream_yields_before_agent_finishes(self) -> None:
+        release = Event()
+        with tempfile.TemporaryDirectory() as d:
+            client, state = _build_client(Path(d))
+            endpoint = next(
+                r.endpoint for r in client.app.routes
+                if getattr(r, 'path', None) == '/api/chat/stream'
+            )
+
+            def run(prompt):
+                state.agent.on_tool_start({'type': 'tool_start', 'message': '正在查看目录…'})
+                if not release.wait(timeout=5):
+                    raise RuntimeError('stream buffered until completion')
+                return AgentRunResult(final_output='ok', turns=1, tool_calls=1, transcript=())
+
+            async def consume():
+                response = await endpoint(ChatRequest(prompt='test'))
+                iterator = response.body_iterator
+                try:
+                    first = await asyncio.wait_for(iterator.__anext__(), timeout=2)
+                    self.assertEqual(json.loads(first)['type'], 'tool_start')
+                    self.assertFalse(release.is_set())
+                    release.set()
+                    final = await asyncio.wait_for(iterator.__anext__(), timeout=2)
+                    self.assertEqual(json.loads(final)['data']['final_output'], 'ok')
+                finally:
+                    release.set()
+                    await iterator.aclose()
+
+            with patch.object(state.agent, 'run', side_effect=run):
+                asyncio.run(consume())
+            self.assertIsNone(state.agent.on_tool_start)
+
+    def test_chat_stream_sends_progress_then_unchanged_result(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            client, state = _build_client(Path(d))
+            old_callback = lambda event: None
+            state.agent.on_tool_start = old_callback
+            result = AgentRunResult(final_output='ok', turns=1, tool_calls=1, transcript=())
+
+            def run(prompt):
+                self.assertEqual(prompt, 'before expanded after')
+                state.agent.on_tool_start({
+                    'type': 'tool_start', 'tool_name': 'list_dir',
+                    'tool_call_id': 'call_1', 'message': '正在查看目录…',
+                })
+                return result
+
+            with patch.object(state.agent, 'run', side_effect=run):
+                response = client.post('/api/chat/stream', json={
+                    'prompt': 'before [Pasted text #1] after',
+                    'pasted_contents': {'1': {'type': 'text', 'content': 'expanded'}},
+                })
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('application/x-ndjson', response.headers['content-type'])
+            events = [json.loads(line) for line in response.text.splitlines()]
+            self.assertEqual([event['type'] for event in events], ['tool_start', 'result'])
+            self.assertEqual(events[0]['message'], '正在查看目录…')
+            with patch.object(state.agent, 'run', return_value=result):
+                legacy = client.post('/api/chat', json={'prompt': 'test'}).json()
+            self.assertEqual(events[-1]['data'], legacy)
+            self.assertIs(state.agent.on_tool_start, old_callback)
+
+    def test_chat_stream_error_restores_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            client, state = _build_client(Path(d))
+            with patch.object(state.agent, 'run', side_effect=RuntimeError('test failure')):
+                response = client.post('/api/chat/stream', json={'prompt': 'test'})
+            self.assertEqual(json.loads(response.text), {
+                'type': 'error', 'error': 'test failure', 'error_type': 'RuntimeError',
+            })
+            self.assertIsNone(state.agent.on_tool_start)
+
+    def test_chat_stream_validates_prompt_and_reports_missing_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            client, _ = _build_client(Path(d))
+            self.assertEqual(client.post('/api/chat/stream', json={'prompt': ' '}).status_code, 400)
+            response = client.post('/api/chat/stream', json={
+                'prompt': 'test', 'resume_session_id': 'missing',
+            })
+            self.assertEqual(json.loads(response.text)['type'], 'error')
+            self.assertIn('not found', json.loads(response.text)['error'])
+
     def test_root_serves_html(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             client, _ = _build_client(Path(d))

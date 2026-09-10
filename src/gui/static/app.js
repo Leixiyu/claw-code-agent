@@ -725,6 +725,41 @@ function autoSizeInput() {
   els.input.style.height = Math.min(els.input.scrollHeight, 200) + "px";
 }
 
+async function streamChat(payload, onProgress) {
+  const response = await fetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || error.error || `HTTP ${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      if (done && buffer.trim()) lines.push(buffer);
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.type === "tool_start") onProgress(event);
+        if (event.type === "result") return event.data;
+        if (event.type === "error") return event;
+      }
+      if (done) throw new Error("连接已结束，但未收到最终回答。请查看会话后再决定是否重试。");
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
 async function send() {
   if (State.isBusy) return;
   const prompt = els.input.value.trim();
@@ -743,7 +778,12 @@ async function send() {
       resume_session_id: State.activeSessionId || null,
       pasted_contents: pastedContents,
     };
-    const data = await apiPost("/api/chat", payload);
+    const data = await streamChat(payload, (event) => {
+      const message = appendMessage({ role: "progress", content: "" });
+      message.querySelector(".body").textContent = event.message;
+      els.chat.scrollTop = els.chat.scrollHeight;
+      setStatus("busy", event.message);
+    });
     if (data.error) {
       appendMessage({ role: "error", content: `${data.error_type}: ${data.error}` });
       setStatus("error", "Error");

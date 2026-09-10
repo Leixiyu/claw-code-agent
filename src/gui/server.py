@@ -9,11 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from threading import Lock
-from typing import Any
+from threading import Event, Lock
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -647,8 +647,7 @@ def create_app(state: AgentState) -> FastAPI:
         }
 
     # ------------- chat ------------------------------------------------------
-    @app.post('/api/chat')
-    async def chat(request: ChatRequest) -> dict[str, Any]:
+    def _chat_prompt(request: ChatRequest) -> str:
         prompt = request.prompt.strip()
         if not prompt:
             raise HTTPException(status_code=400, detail='Prompt is empty')
@@ -665,10 +664,18 @@ def create_app(state: AgentState) -> FastAPI:
                 for ref_id, payload in request.pasted_contents.items()
             }
             prompt = expand_pasted_text_refs(prompt, store)
+        return prompt
 
-        def _run() -> dict[str, Any]:
-            with state.lock():
-                agent = state.agent
+    def _run_chat(
+        request: ChatRequest,
+        prompt: str,
+        on_tool_start: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        with state.lock():
+            agent = state.agent
+            previous_callback = agent.on_tool_start
+            agent.on_tool_start = on_tool_start
+            try:
                 if request.resume_session_id is not None:
                     try:
                         stored = load_agent_session(
@@ -684,9 +691,14 @@ def create_app(state: AgentState) -> FastAPI:
                 else:
                     result = agent.run(prompt)
                 return _serialize_run_result(result)
+            finally:
+                agent.on_tool_start = previous_callback
 
+    @app.post('/api/chat')
+    async def chat(request: ChatRequest) -> dict[str, Any]:
+        prompt = _chat_prompt(request)
         try:
-            payload = await asyncio.to_thread(_run)
+            payload = await asyncio.to_thread(_run_chat, request, prompt)
         except HTTPException:
             raise
         except Exception as exc:  # surface the error in the UI
@@ -698,6 +710,55 @@ def create_app(state: AgentState) -> FastAPI:
                 },
             )
         return payload
+
+    # Keep workers alive on disconnect: losing the display must not cancel or
+    # resubmit business operations. The agent lock still serializes requests.
+    chat_workers: set[asyncio.Task] = set()
+
+    @app.post('/api/chat/stream')
+    async def chat_stream(request: ChatRequest) -> StreamingResponse:
+        prompt = _chat_prompt(request)
+
+        async def events():
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            closed = Event()
+
+            def emit(event: dict[str, Any]) -> None:
+                if not closed.is_set():
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+
+            def run() -> None:
+                try:
+                    result = _run_chat(request, prompt, emit)
+                    emit({'type': 'result', 'data': result})
+                except Exception as exc:
+                    emit({
+                        'type': 'error',
+                        'error': str(exc.detail) if isinstance(exc, HTTPException) else str(exc),
+                        'error_type': type(exc).__name__,
+                    })
+
+            worker = asyncio.create_task(asyncio.to_thread(run))
+            chat_workers.add(worker)
+            worker.add_done_callback(chat_workers.discard)
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=15)
+                    except asyncio.TimeoutError:
+                        event = {'type': 'heartbeat'}
+                    yield json.dumps(event, ensure_ascii=False) + '\n'
+                    if event['type'] in {'result', 'error'}:
+                        break
+            finally:
+                closed.set()
+
+        return StreamingResponse(
+            events(),
+            media_type='application/x-ndjson',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
 
     @app.post('/api/clear')
     async def clear_state() -> dict[str, Any]:
