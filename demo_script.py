@@ -22,7 +22,7 @@ def main():
                     continue
                 event = json.loads(line)
                 if event["type"] == "tool_start":
-                    print(f"[进度] {event['message']}", flush=True)
+                    print(f"[进度] {event['message']}", end="\n\n", flush=True)
                 elif event["type"] == "result":
                     print(event["data"].get("final_output") or "服务未返回回复。")
                     return

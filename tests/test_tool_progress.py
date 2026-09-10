@@ -25,7 +25,7 @@ class ToolProgressTests(unittest.TestCase):
         with redirect_stdout(out), redirect_stderr(err), patch('builtins.print', wraps=print) as printer:
             _print_tool_progress({'message': '正在查看目录…'})
         self.assertEqual(out.getvalue(), '')
-        self.assertEqual(err.getvalue(), '[进度] 正在查看目录…\n')
+        self.assertEqual(err.getvalue(), '[进度] 正在查看目录…\n\n')
         self.assertTrue(printer.call_args.kwargs['flush'])
 
     def test_progress_precedes_execution_and_does_not_change_result(self) -> None:

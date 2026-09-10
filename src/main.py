@@ -214,7 +214,7 @@ def _parse_tools_flag(raw_tools: str | None) -> tuple[str, ...] | None:
 
 def _print_tool_progress(event: dict) -> None:
     # Keep stdout/final output compatible with scripts; flush even when redirected.
-    print(f"[进度] {event['message']}", file=sys.stderr, flush=True)
+    print(f"[进度] {event['message']}", end='\n\n', file=sys.stderr, flush=True)
 
 
 def _build_agent(args: argparse.Namespace) -> LocalCodingAgent:
