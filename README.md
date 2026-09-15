@@ -16,6 +16,33 @@
 
 ---
 
+## Video Agent multi-user prototype
+
+The public CLI/GUI now requires login. Start with [DEPLOYMENT.md](DEPLOYMENT.md),
+not the historical single-user command examples below. Administrator setup:
+
+```bash
+claw-code-agent users-create alice
+claw-code-agent login alice
+claw-code-agent agent-chat
+# Or start the browser login UI:
+claw-code-gui --no-browser
+```
+
+Configure AGENT_WORKSPACE in the project .env. It is a container for users/<user_id>/,
+not the cwd exposed to every agent. Credentials live outside it (HARNESS_AUTH_DIR).
+Each user has uploads/, sessions/, runtime directories and three task ID/status indexes.
+Submit initializes pending; Status tools refresh the indexed status. List tools use
+cached status and fetch live results only for done tasks, without polling status APIs.
+The 12 business tools query live results; no separate task-result, dataset-manifest
+or model-metadata files are saved. Chat transcripts may retain tool results.
+Result functions now return manifest/metadata objects instead of local file paths.
+
+The authenticated prototype enables business tools and read-only file tools, not
+the original shell/write/configuration/delegation features described below.
+Use localhost + SSH forwarding for testing; this is not a hardened public service.
+Originals are preserved by the explicit migration command; no data is deleted on startup.
+
 ## 📢 What's New
 
 > **April 2026 — Major Update**
@@ -222,6 +249,7 @@ claw-code-agent/
 ├── README.md                     # Project overview, setup, and usage
 ├── CLAUDE.md                     # Development instructions for maintaining the Harness
 ├── DEPLOYMENT.md                 # Server deployment, security, update, and rollback
+├── DEPLOYMENT_LEGACY.md          # Redirect to the unified DEPLOYMENT.md guide
 ├── TESTING_GUIDE.md              # Commands for testing every Harness feature
 ├── PARITY_CHECKLIST.md           # Implementation status vs the npm source
 ├── agent_operation.md            # Runtime video-agent policy template
@@ -244,6 +272,11 @@ claw-code-agent/
 │   ├── agent_tools.py            # Tool definitions & execution engine
 │   ├── tool_progress.py          # User-facing activity labels for each tool
 │   ├── business_functions.py     # Analysis/Processing/Training business Functions
+│   ├── auth_runtime.py           # Password hashes, expiring tokens, user identities
+│   ├── auth_cli.py               # Login/logout and local administrator commands
+│   ├── user_workspace.py         # User paths, task ID/status indexes, atomic writes
+│   ├── user_agent.py             # Shared authenticated CLI/GUI policy
+│   ├── user_migration.py         # Explicit non-destructive legacy migration
 │   ├── agent_prompting.py        # System prompt assembly
 │   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
 │   ├── agent_context.py          # Context building & CLAUDE.md discovery
@@ -285,13 +318,15 @@ claw-code-agent/
 │   └── gui/                      # Local web GUI (FastAPI + vanilla JS SPA)
 │       ├── __main__.py           # `python -m src.gui` entry point
 │       ├── server.py             # FastAPI app and JSON endpoints
-│       └── static/               # index.html, app.css, app.js
+│       ├── auth_app.py           # Login, authenticated routing, user uploads
+│       └── static/               # index.html, app.css, app.js, auth.js
 └── tests/                        # Unit and opt-in integration tests
     ├── test_agent_runtime.py
     ├── test_video_analysis.py        # Opt-in real HTTP video API workflow
     ├── test_video_analysis_unit.py   # Mocked video Function schemas and edge cases
     ├── test_video_processing.py      # Video-processing HTTP Function and Tool tests
-    ├── test_model_training.py        # Model-training Tool schema and placeholder tests
+    ├── test_model_training.py        # Model-training HTTP Function and Tool tests
+    ├── test_task_indexes.py          # Cached status, legacy indexes, done-only result lookup
     ├── test_agent_context.py
     ├── test_agent_context_usage.py
     ├── test_agent_prompting.py
@@ -944,14 +979,6 @@ Claw Code Agent uses a **tiered permission system** to keep the agent safe by de
 The full implementation checklist tracking parity against the npm `src` lives in [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md).
 
 It covers: core runtime, CLI modes, prompt assembly, context/memory, slash commands, tools, permissions, plugins, MCP, REPL/TUI, remote features, editor integrations, and internal subsystems.
-
----
-
-## ⚠️ Disclaimer
-
-- This repository is a **Python reimplementation** inspired by the Claude Code npm architecture.
-- It does **not** ship the original npm source.
-- It is **not** affiliated with or endorsed by Anthropic.
 
 ---
 

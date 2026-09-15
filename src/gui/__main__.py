@@ -26,7 +26,7 @@ def main() -> None:
     parser.add_argument(
         '--cwd',
         default=os.environ.get('AGENT_WORKSPACE') or '.',
-        help='Working directory that the agent operates in (default: current dir).',
+        help='Workspace container; authenticated agents operate in users/<user_id>.',
     )
     parser.add_argument(
         '--model',
@@ -43,7 +43,7 @@ def main() -> None:
     parser.add_argument(
         '--session-dir',
         default=str(DEFAULT_AGENT_SESSION_DIR),
-        help='Directory where agent sessions are saved (default: .port_sessions/agent).',
+        help='Legacy internal default; public multi-user GUI always uses users/<user_id>/sessions.',
     )
     parser.add_argument('--allow-shell', action='store_true')
     parser.add_argument('--allow-write', action='store_true')
@@ -136,9 +136,8 @@ def main() -> None:
     print(f'  cwd       : {state.cwd}')
     print(f'  model     : {state.model}')
     print(f'  base-url  : {state.base_url}')
-    print(f'  sessions  : {state.session_directory}')
-    print(f'  shell     : {"on" if state.allow_shell else "off"}')
-    print(f'  write     : {"on" if state.allow_write else "off"}')
+    print(f'  sessions  : {state.cwd}/users/<user_id>/sessions (login required)')
+    print('  shell/write: disabled for authenticated prototype users')
 
     if not args.no_browser:
         try:

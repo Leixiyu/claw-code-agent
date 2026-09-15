@@ -130,6 +130,7 @@ class LocalCodingAgent:
     workflow_runtime: WorkflowRuntime | None = None
     worktree_runtime: WorktreeRuntime | None = None
     on_tool_start: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
+    authenticated_user_id: str | None = None
     last_session: AgentSessionState | None = field(default=None, init=False, repr=False)
     last_run_result: AgentRunResult | None = field(default=None, init=False, repr=False)
     cumulative_usage: UsageStats = field(default_factory=UsageStats, init=False, repr=False)
@@ -377,6 +378,9 @@ class LocalCodingAgent:
         return result
 
     def resume(self, prompt: str, stored_session: StoredAgentSession) -> AgentRunResult:
+        if self.authenticated_user_id:
+            from .user_agent import validate_user_session
+            validate_user_session(stored_session, self.runtime_config.cwd)
         self.managed_agent_id = None
         self.resume_source_session_id = stored_session.session_id
         session = AgentSessionState.from_persisted(
@@ -385,6 +389,18 @@ class LocalCodingAgent:
             system_context=stored_session.system_context,
             messages=stored_session.messages,
         )
+        if self.authenticated_user_id:
+            # Preserve conversation/tool history, but never restore obsolete
+            # single-user system paths/policies from a migrated session.
+            current = self.build_session(scratchpad_directory=(
+                self.runtime_config.scratchpad_root / stored_session.session_id))
+            session.system_prompt_parts = current.system_prompt_parts
+            session.system_context = current.system_context
+            session.user_context = current.user_context
+            session.messages = current.messages + [
+                message for message in session.messages
+                if message.role != 'system' and message.message_id != 'user_context_0'
+            ]
         self._append_file_history_replay_if_needed(
             session,
             stored_session.file_history,
@@ -422,6 +438,13 @@ class LocalCodingAgent:
         scratchpad_directory: Path | None,
         existing_file_history: tuple[dict[str, object], ...],
     ) -> AgentRunResult:
+        if self.authenticated_user_id and prompt.strip().startswith('/'):
+            command = prompt.strip().split()[0]
+            if command not in {'/clear', '/help', '/compact'}:
+                return AgentRunResult(
+                    final_output='This command is unavailable in the authenticated prototype. Use /clear, /compact or normal chat.',
+                    turns=0, tool_calls=0, transcript=(), session_id=self.active_session_id,
+                )
         slash_result = preprocess_slash_command(self, prompt)
         if slash_result.handled and not slash_result.should_query:
             return AgentRunResult(

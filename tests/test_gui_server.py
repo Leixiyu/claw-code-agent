@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from src.gui.server import AgentState, ChatRequest, create_app
+from src.gui.server import AgentState, ChatRequest, create_user_app as create_app  # Internal router tests; public auth is tested separately.
 from src.agent_types import AgentRunResult
 
 

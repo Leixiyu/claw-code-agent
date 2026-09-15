@@ -39,6 +39,9 @@ dependencies = [
   "httpx>=0.27,<1.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
 [project.urls]
 Homepage = "https://github.com/HarnessLab/claw-code-agent"
 Repository = "https://github.com/HarnessLab/claw-code-agent"

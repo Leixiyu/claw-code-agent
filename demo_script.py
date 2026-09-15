@@ -1,17 +1,30 @@
 import json
+import getpass
+import os
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-API_URL = "http://183.11.226.132:8765/api/chat/stream"
+API_URL = os.environ.get('HARNESS_GUI_URL', 'http://127.0.0.1:8765').rstrip('/') + '/api/chat/stream'
 
 PROMPT = "只检查 Agent Workspace 并简要说明可见目录，不要修改任何内容。"
 
 
 def main():
+    token = os.environ.get('HARNESS_AUTH_TOKEN')
+    if not token:
+        login = Request(API_URL.removesuffix('/chat/stream') + '/auth/login',
+                        data=json.dumps({'username': input('Username: '), 'password': getpass.getpass()}).encode(),
+                        headers={'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urlopen(login, timeout=30) as response:
+                token = json.load(response)['access_token']
+        except (HTTPError, URLError, ValueError, KeyError, TimeoutError) as exc:
+            print(f'登录失败：{exc}')
+            return
     request = Request(
         API_URL,
         data=json.dumps({"prompt": PROMPT}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         method="POST",
     )
 

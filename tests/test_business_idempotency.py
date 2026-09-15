@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent_types import AgentRuntimeConfig
-from tests.test_model_training import _write_dataset_manifest
+from src.user_workspace import add_task_id
 
 
 CASES = (
@@ -30,7 +30,12 @@ class BusinessIdempotencyTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         (self.root / 'demo.mp4').write_bytes(b'video')
-        _write_dataset_manifest(self.root)
+        add_task_id(self.root, 'processing', 'processing-fixture')
+        manifest = patch('src.business_functions._get_processing_backend_manifest', return_value={
+            'dataset_id': 'fire-inspect-01', 'scenario': 'fire_inspection', 'status': 'ready',
+        })
+        manifest.start()
+        self.addCleanup(manifest.stop)
         self.registry = default_tool_registry()
         self.context = replace(
             build_tool_context(AgentRuntimeConfig(cwd=self.root)),

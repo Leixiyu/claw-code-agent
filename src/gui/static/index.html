@@ -7,7 +7,16 @@
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
-  <div id="app">
+  <section id="login-panel" style="max-width:360px;margin:12vh auto;padding:24px" hidden>
+    <h1>Claw Code 登录</h1>
+    <form id="login-form" class="settings">
+      <label>用户名 <input name="username" autocomplete="username" required /></label>
+      <label>密码 <input name="password" type="password" autocomplete="current-password" required /></label>
+      <button class="btn-primary" type="submit">登录</button>
+      <p id="login-error" role="alert"></p>
+    </form>
+  </section>
+  <div id="app" hidden>
     <aside class="sidebar">
       <div class="sidebar-head">
         <div class="brand">
@@ -15,6 +24,8 @@
           <span class="brand-name">Claw&nbsp;Code</span>
         </div>
         <button id="new-session-btn" class="btn-primary" type="button">+ New chat</button>
+        <div><span id="signed-in-user"></span> <button id="logout-user" type="button">退出登录</button></div>
+        <label>上传视频 <input id="video-upload" type="file" accept="video/*" multiple /></label>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-title">Sessions</div>
@@ -550,6 +561,7 @@
     </div>
   </div>
 
+  <script src="/static/auth.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

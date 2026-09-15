@@ -80,6 +80,10 @@ def save_agent_session(session: StoredAgentSession, directory: Path | None = Non
 
 def load_agent_session(session_id: str, directory: Path | None = None) -> StoredAgentSession:
     target_dir = directory or DEFAULT_AGENT_SESSION_DIR
+    if not session_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in session_id):
+        raise FileNotFoundError('invalid session ID')
+    from .user_workspace import contained
+    contained(target_dir, target_dir / f'{session_id}.json')
     data = json.loads((target_dir / f'{session_id}.json').read_text(encoding='utf-8'))
     return StoredAgentSession(
         session_id=data['session_id'],

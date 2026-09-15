@@ -443,7 +443,12 @@ class StateUpdate(BaseModel):
 # App factory
 # ---------------------------------------------------------------------------
 
-def create_app(state: AgentState) -> FastAPI:
+def create_app(state: AgentState, *, auth_store=None) -> FastAPI:
+    from .auth_app import create_authenticated_app
+    return create_authenticated_app(state, auth_store)
+
+
+def create_user_app(state: AgentState) -> FastAPI:
     app = FastAPI(title='Claw Code GUI', version='1.0')
 
     app.include_router(create_tasks_router(lambda: state.cwd))

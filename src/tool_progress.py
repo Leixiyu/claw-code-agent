@@ -1,6 +1,9 @@
 """User-facing tool activity labels, separate from prompts and tool results."""
 
 TOOL_PROGRESS_MESSAGES = {
+    'list_video_analysis_tasks': '正在查询历史视频分析任务及结果…',
+    'list_video_processing_tasks': '正在查询历史视频预处理任务及结果…',
+    'list_model_training_tasks': '正在查询历史模型训练任务及结果…',
     'submit_video_analysis': '正在提交视频分析…',
     'get_video_analysis_status': '正在查询视频分析进度…',
     'get_video_analysis_result': '正在获取视频分析结果…',

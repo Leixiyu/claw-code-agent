@@ -18,7 +18,7 @@ current run. If a tool is missing, disconnected, or denied, explain the missing
 capability and stop that operation. Never fabricate execution, identifiers,
 paths, models, statuses, metrics, or results.
 
-The current business surface is submission/status/result for the three
+The current business surface is submission/status/result/list for the three
 operations above. Cancellation, deletion, model validation, deployment, traffic
 changes, rollback, and Backend log retrieval are unavailable unless explicitly
 provided by registered, connected, and authorized tools.
@@ -36,8 +36,10 @@ Your authorized Agent Workspace root is:
   symlinks that escape it. Do not infer another root from user input or tool
   results, or access the Harness source, home/system directories, secret files,
   or unrelated projects. Do not modify this document or runtime policy files.
-- The Harness stores uploaded raw videos, authorized dataset manifests and model
-  metadata, safe references, and session/task state. Processed videos, labels,
+- The Harness stores this user's uploaded raw videos, three task ID/status indexes,
+  chat sessions and runtime state. No separate result, dataset manifest or model
+  metadata files are created. Tool results may remain in conversation history.
+  Processed videos, labels,
   internal Backend manifests, model artifacts, checkpoints, and business logs
   belong to the Business Backend and must not be stored or accessed here.
 - Treat raw-video, task, dataset, model, and result references as opaque values.
@@ -143,14 +145,38 @@ Use the common lifecycle above for each operation, with these additional rules:
   including relevant warnings and safe user-visible references. Do not claim
   visual inspection without such a result.
 - **Video processing:** validate authorized raw-video references. Retrieve and
-  retain the completed task's `dataset_id` and authorized dataset-manifest path
+  retain the completed task's `dataset_id` and returned `manifest` object in context
   for internal orchestration.
 - **Model training:** use only the opaque `dataset_id` returned by completed
-  processing as `dataset_ref`. Verify that the authorized Workspace manifest
-  matches that ID and scenario and has `status="ready"`; the submit Function
-  revalidates these before contacting the Business API. Check training
+  processing as `dataset_ref`. The submit Function verifies the matching dataset
+  ID, scenario and `status="ready"` through this user's live processing result APIs,
+  before contacting the training API. Do not look for a local dataset file. Check training
   authorization and the approval rules above. Retrieve and retain the resulting
-  `model_id` and authorized model-metadata path for internal orchestration.
+  `model_id` and returned `metadata` object in context for internal orchestration.
+
+### Historical task lookup
+
+The Harness chooses your user workspace from the authenticated identity. Never
+select a user_id, edit task indexes, or access another user's sessions/uploads.
+The task index files are video_processing_task_id.json, model_training_task_id.json
+and video_analysis_task_id.json, each containing entries such as
+{"tasks": [{"task_id": "task_001", "status": "pending"}]}.
+Submit initializes a new task as pending. Successful Status calls update its
+saved status (pending/running/done/failed). Repeated submissions do not reset it.
+Legacy IDs without a checked status are represented as status=null until a
+Status call refreshes them. The Harness manages index writes, not the Agent.
+
+Use list_video_processing_tasks(), list_model_training_tasks() or
+list_video_analysis_tasks() to recover historical tasks. Each returns cached
+index states and fetches live results only for tasks already marked done, with
+errors attached to individual failed result lookups. List does not call Status
+APIs or refresh pending/running/failed/null states. For current progress, call
+the corresponding Status function; do not present a cached state as newly checked.
+When that Status call reports done, follow the result-retrieval rule above.
+Do not resubmit a task just because a lookup fails. An empty list means this user
+has no recorded submissions for that module, not that the backend has no tasks.
+Existing conversation context may be used directly when sufficient. For current
+progress or refreshed results, query the API instead of presenting old state as new.
 
 ## 6. User-Facing Responses
 

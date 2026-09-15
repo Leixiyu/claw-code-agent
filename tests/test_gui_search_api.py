@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from src.gui.server import AgentState, create_app
+from src.gui.server import AgentState, create_user_app as create_app  # Internal router tests; public auth is tested separately.
 
 
 def _write_manifest(cwd: Path) -> None:

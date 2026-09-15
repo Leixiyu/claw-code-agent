@@ -218,6 +218,15 @@ def _print_tool_progress(event: dict) -> None:
 
 
 def _build_agent(args: argparse.Namespace) -> LocalCodingAgent:
+    if hasattr(args, '_user_workspace'):
+        from .user_agent import user_runtime_config, user_tools, user_prompt
+        return LocalCodingAgent(
+            model_config=_build_model_config(args),
+            runtime_config=user_runtime_config(_build_runtime_config(args), args._user_workspace),
+            override_system_prompt=user_prompt(args._workspace_container, args._user_workspace),
+            tool_registry=user_tools(), on_tool_start=_print_tool_progress,
+            authenticated_user_id=args._user_id,
+        )
     return LocalCodingAgent(
         model_config=_build_model_config(args),
         runtime_config=_build_runtime_config(args),
@@ -320,10 +329,13 @@ def _add_agent_resume_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _launch_background_agent(args: argparse.Namespace) -> int:
-    background_runtime = BackgroundSessionRuntime()
+    background_runtime = BackgroundSessionRuntime(Path(args.background_root)) if hasattr(args, '_user_workspace') else BackgroundSessionRuntime()
     background_id = background_runtime.create_id()
     forwarded_args: list[str] = []
-    _append_agent_forwarded_args(forwarded_args, args, include_backend=True)
+    forwarded = argparse.Namespace(**vars(args))
+    if hasattr(args, '_workspace_container'):
+        forwarded.cwd = str(args._workspace_container)
+    _append_agent_forwarded_args(forwarded_args, forwarded, include_backend=True)
     forwarded_args.extend(['--background-root', str(background_runtime.root)])
     command = build_background_worker_command(
         background_id=background_id,
@@ -337,7 +349,9 @@ def _launch_background_agent(args: argparse.Namespace) -> int:
         model=args.model,
         background_id=background_id,
         process_cwd=Path(__file__).resolve().parent.parent,
-        process_env={**os.environ, 'OPENAI_API_KEY': str(args.api_key)},
+        process_env={**os.environ, 'OPENAI_API_KEY': str(args.api_key),
+                     **({'HARNESS_AUTH_TOKEN': args._auth_token,
+                         'AGENT_WORKSPACE': str(args._workspace_container)} if hasattr(args, '_auth_token') else {})},
     )
     print('# Background Session')
     print(f'background_id={record.background_id}')
@@ -373,7 +387,8 @@ def _run_background_worker(args: argparse.Namespace) -> int:
 
 
 def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, StoredAgentSession]:
-    stored_session = load_agent_session(args.session_id)
+    stored_session = load_agent_session(args.session_id, directory=(
+        args._user_workspace / 'sessions' if hasattr(args, '_user_workspace') else None))
     model_config = deserialize_model_config(stored_session.model_config)
     runtime_config = deserialize_runtime_config(stored_session.runtime_config)
 
@@ -511,10 +526,18 @@ def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, St
             scratchpad_root=Path(args.scratchpad_root).resolve(),
         )
 
+    user_options = {}
+    if hasattr(args, '_user_workspace'):
+        from .user_agent import user_runtime_config, user_tools, user_prompt, validate_user_session
+        validate_user_session(stored_session, args._user_workspace)
+        runtime_config = user_runtime_config(runtime_config, args._user_workspace)
+        user_options = dict(tool_registry=user_tools(), authenticated_user_id=args._user_id,
+                            override_system_prompt=user_prompt(args._workspace_container, args._user_workspace))
     agent = LocalCodingAgent(
         model_config=model_config,
         runtime_config=runtime_config,
         on_tool_start=_print_tool_progress,
+        **user_options,
     )
     return agent, stored_session
 
@@ -597,6 +620,8 @@ def _run_agent_chat_loop(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Python porting workspace for the Claude Code rewrite effort')
     subparsers = parser.add_subparsers(dest='command', required=True)
+    from .auth_cli import add_auth_commands
+    add_auth_commands(subparsers)
     subparsers.add_parser('summary', help='render a Markdown summary of the Python porting workspace')
     subparsers.add_parser('manifest', help='print the current Python workspace manifest')
     subparsers.add_parser('parity-audit', help='compare the Python workspace against the local ignored TypeScript archive when available')
@@ -959,6 +984,15 @@ def main(argv: list[str] | None = None) -> int:
     load_project_env()
     parser = build_parser()
     args = parser.parse_args(argv)
+    from .auth_cli import handle_auth_command, prepare_user_args
+    try:
+        if args.command in {'users-create', 'login', 'logout', 'whoami', 'migrate-user-data'}:
+            return handle_auth_command(args)
+        if args.command.startswith('agent-') or args.command in {'agent', 'daemon', 'token-budget', 'agents'}:
+            prepare_user_args(args)
+    except (ValueError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     manifest = build_port_manifest()
 
     if args.command == 'summary':
@@ -1496,11 +1530,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == 'agent-bg-worker':
         return _run_background_worker(args)
     if args.command == 'agent-ps':
-        print(BackgroundSessionRuntime().render_ps())
+        print(BackgroundSessionRuntime(Path(args.background_root)).render_ps())
         return 0
     if args.command == 'agent-logs':
         print(
-            BackgroundSessionRuntime().render_logs(
+            BackgroundSessionRuntime(Path(args.background_root)).render_logs(
                 args.background_id,
                 tail=args.tail,
             )
@@ -1508,14 +1542,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == 'agent-attach':
         print(
-            BackgroundSessionRuntime().render_attach(
+            BackgroundSessionRuntime(Path(args.background_root)).render_attach(
                 args.background_id,
                 tail=args.tail,
             )
         )
         return 0
     if args.command == 'agent-kill':
-        record = BackgroundSessionRuntime().kill(args.background_id)
+        record = BackgroundSessionRuntime(Path(args.background_root)).kill(args.background_id)
         print('# Background Session')
         print(f'background_id={record.background_id}')
         print(f'status={record.status}')
@@ -1529,11 +1563,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.daemon_command == 'worker':
             return _run_background_worker(args)
         if args.daemon_command == 'ps':
-            print(BackgroundSessionRuntime().render_ps())
+            print(BackgroundSessionRuntime(Path(args.background_root)).render_ps())
             return 0
         if args.daemon_command == 'logs':
             print(
-                BackgroundSessionRuntime().render_logs(
+                BackgroundSessionRuntime(Path(args.background_root)).render_logs(
                     args.background_id,
                     tail=args.tail,
                 )
@@ -1541,7 +1575,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.daemon_command == 'attach':
             print(
-                BackgroundSessionRuntime().render_attach(
+                BackgroundSessionRuntime(Path(args.background_root)).render_attach(
                     args.background_id,
                     tail=args.tail,
                 )

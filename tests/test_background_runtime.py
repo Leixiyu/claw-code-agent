@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from src.background_runtime import BackgroundSessionRuntime
+from src.auth_runtime import AuthStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,11 @@ class BackgroundRuntimeTests(unittest.TestCase):
             workspace = run_dir / 'workspace'
             workspace.mkdir()
             env = os.environ.copy()
+            store = AuthStore(workspace, run_dir / 'auth')
+            user = store.create_user('worker-test', 'test-worker-password')
+            env['HARNESS_AUTH_DIR'] = str(store.directory)
+            env['AGENT_WORKSPACE'] = str(workspace)
+            env['HARNESS_AUTH_TOKEN'] = store.login('worker-test', 'test-worker-password')['access_token']
             existing_pythonpath = env.get('PYTHONPATH')
             env['PYTHONPATH'] = (
                 f'{PROJECT_ROOT}:{existing_pythonpath}'
@@ -70,7 +76,7 @@ class BackgroundRuntimeTests(unittest.TestCase):
                 for line in launch.stdout.splitlines()
                 if line.startswith('background_id=')
             )
-            runtime = BackgroundSessionRuntime(run_dir / '.port_sessions' / 'background')
+            runtime = BackgroundSessionRuntime(workspace / 'users' / user['user_id'] / '.port_sessions' / 'background')
             record = runtime.load_record(background_id)
             for _ in range(60):
                 if record.status in {'completed', 'failed', 'exited'}:

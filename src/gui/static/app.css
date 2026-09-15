@@ -1171,3 +1171,4 @@ body[data-view="diag"] [data-view-name]:not([data-view-name="diag"]) { display: 
     display: none;
   }
 }
+[hidden] { display: none !important; }

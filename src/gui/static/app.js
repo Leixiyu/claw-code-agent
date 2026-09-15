@@ -2508,6 +2508,25 @@ function bind() {
 }
 
 async function init() {
+  await window.requireHarnessLogin();
+  document.querySelector('#video-upload').onchange = async (event) => {
+    const input = event.target;
+    input.disabled = true;
+    try {
+      for (const file of input.files) {
+        setStatus('busy', `正在上传 ${file.name}…`);
+        const response = await fetch('/api/uploads', {
+          method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file,
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || 'Upload failed');
+        els.input.value += `${els.input.value ? '\n' : ''}视频：${payload.video_ref.path}`;
+        appendMessage({ role: 'progress', content: `已上传：${payload.video_ref.path}` });
+      }
+      setStatus('ready', 'Ready');
+    } catch (error) { appendMessage({ role: 'error', content: error.message }); }
+    finally { input.disabled = false; input.value = ''; }
+  };
   bind();
   setView("chat");
   setStatus("ready", "Ready");

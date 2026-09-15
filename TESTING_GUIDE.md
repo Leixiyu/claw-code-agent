@@ -1,5 +1,48 @@
 # Testing Guide
 
+## 多用户 Prototype（当前入口）
+
+先按 DEPLOYMENT.md 创建测试账号并登录。下文旧的单用户管理功能测试说明
+仅针对内部组件，不代表这些管理入口对登录用户开放。
+
+离线回归（不调用真实 Business API）：
+
+```bash
+pip install -e '.[test]'
+python -m unittest discover -s tests -p test_user_prototype.py
+python -m unittest discover -s tests -p test_video_analysis_unit.py
+python -m unittest discover -s tests -p test_video_processing.py
+python -m unittest discover -s tests -p test_model_training.py
+python -m unittest discover -s tests -p test_business_idempotency.py
+python -m unittest discover -s tests -p 'test_gui*.py'
+python -m unittest discover -s tests -p test_tool_progress.py
+```
+
+完整测试（包括 pytest 风格用例）：
+
+```bash
+RUN_VIDEO_ANALYSIS_INTEGRATION=0 python -m pytest tests -q
+```
+
+macOS 若旧 worktree 测试因 /var 与 /private/var 的符号链接路径比较失败，
+可为测试命令指定 TMPDIR=/private/tmp；这不改变运行代码。
+
+test_user_prototype 测试公开认证入口、双用户目录/会话隔离、上传、CLI 登录、
+流式事件、任务索引、三个模块 live Result 和非破坏迁移。
+test_gui* 使用内部 create_user_app 独立测试原有路由，不用于证明认证通过。
+真实接口测试 test_video_analysis.py 必须显式设置 RUN_VIDEO_ANALYSIS_INTEGRATION=1；
+不要在批量离线测试时开启。它是受信任的开发测试入口，不等于登录客户端。
+
+test_task_indexes 覆盖旧索引兼容、并发写入、状态查询错误保留原状态、
+三个模块 List 仅查询 done 任务结果且不访问 Status API。
+
+手动验收：以 Alice 上传并提交任务，确认索引 tasks 条目只有 task_id/status，初始 pending；
+调用 Status Function 后确认 status 更新，List 仅为本地 done 的任务请求 Result。
+pending/running/null 任务需先查询 Status 才能发现完成；幂等重放不重置已查询状态。查询 result 后
+没有生成 tasks/datasets/models。再用 Bob 登录，确认看不到 Alice 的视频、聊天
+和任务。确认 GUI/CLI 同一账号共用 sessions。旧数据迁移先不加 --apply 查看计划。
+
+
 This guide is the user-facing test checklist for the current Python implementation.
 
 It is organized by runtime surface, not by source file. Every implemented feature should have at least one concrete command here.

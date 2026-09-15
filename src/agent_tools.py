@@ -374,8 +374,8 @@ def default_tool_registry() -> dict[str, AgentTool]:
             name='get_video_processing_result',
             description=(
                 'Get the public dataset manifest produced by a completed video-processing '
-                'task. The Harness saves the manifest in the Agent workspace and returns '
-                'its dataset ID and authorized relative path, not a backend storage path.'
+                'task. Returns dataset_id and the live manifest object without creating '
+                'a local manifest file or exposing backend storage paths.'
             ),
             parameters={
                 'type': 'object',
@@ -394,8 +394,7 @@ def default_tool_registry() -> dict[str, AgentTool]:
             name='submit_model_training',
             description=(
                 'Submit asynchronous model training using a processed dataset. dataset_ref '
-                'must identify a matching ready manifest in '
-                'AGENT_WORKSPACE/datasets/<dataset_ref>.json from a completed '
+                'must identify a matching ready dataset verified through live '
                 'video-processing result. The Business Backend owns the dataset and base '
                 'model; the Harness sends only logical JSON references and does not upload '
                 'training data or model files. The Harness manages idempotency '
@@ -413,7 +412,7 @@ def default_tool_registry() -> dict[str, AgentTool]:
                         'type': 'string',
                         'description': (
                             'Opaque dataset ID from get_video_processing_result. It must '
-                            'match a ready Harness dataset manifest and is not a backend '
+                            'match a ready dataset in the current user processing results and is not a backend '
                             'filesystem path.'
                         ),
                     },
@@ -454,9 +453,9 @@ def default_tool_registry() -> dict[str, AgentTool]:
         AgentTool(
             name='get_model_training_result',
             description=(
-                'Get the logical model ID and authorized metadata path produced by a '
-                'completed model-training task. The Harness saves public model metadata '
-                'in the Agent workspace; Backend model artifact paths are never exposed.'
+                'Get the logical model ID and live metadata object produced by a '
+                'completed model-training task. No local metadata file is created; '
+                'Backend model artifact paths are never exposed.'
             ),
             parameters={
                 'type': 'object',
@@ -1504,7 +1503,24 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_execute_skill,
         ),
     ]
+    for name in ('list_video_analysis_tasks', 'list_video_processing_tasks', 'list_model_training_tasks'):
+        tools.append(AgentTool(
+            name=name,
+            description='List the current user tasks with cached index statuses. Fetch live results only for tasks marked done; partial result failures are returned per task. Use the corresponding status tool to refresh pending/running/unknown (null) tasks; this list does not query status APIs.',
+            parameters={'type': 'object', 'properties': {}, 'additionalProperties': False},
+            handler=_business_list_handler(name),
+        ))
     return {tool.name: tool for tool in tools}
+
+
+def _business_list_handler(name: str):
+    def handler(arguments, context):
+        from . import business_functions
+        return getattr(business_functions, name)(
+            arguments, workspace_root=context.root,
+            timeout_seconds=context.command_timeout_seconds,
+        )
+    return handler
 
 
 def _submit_video_analysis(

@@ -8,12 +8,14 @@ import mimetypes
 import os
 import threading
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
 import httpx
+
+from .user_workspace import add_task_id, read_task_ids, read_tasks, update_task_status, require_task, contained
 
 
 VIDEO_ANALYSIS_API_ENV = 'VIDEO_ANALYSIS_API'
@@ -35,13 +37,6 @@ _TRAINING_IDEMPOTENCY_FILE = 'model_training_idempotency.json'
 _TRAINING_IDEMPOTENCY_LOCK_FILE = 'model_training_idempotency.lock'
 _TRAINING_PROCESS_LOCK = threading.Lock()
 
-_TASKS_DIRECTORY = Path('tasks')
-_DATASETS_DIRECTORY = Path('datasets')
-_MODELS_DIRECTORY = Path('models')
-_TASK_RECORD_SCHEMA_VERSION = 1
-_WORKSPACE_RECORD_LOCK_FILE = 'workspace_records.lock'
-_WORKSPACE_RECORD_LOCK = threading.Lock()
-_TASK_MODULES = frozenset({'analysis', 'processing', 'training'})
 
 
 class VideoAnalysisError(RuntimeError):
@@ -170,6 +165,10 @@ def _resolve_uploaded_video(
         resolved = candidate.resolve(strict=True)
     except OSError as exc:
         raise error_type(f'uploaded video file was not found: {raw_path!r}') from exc
+    try:
+        contained(workspace_root, resolved)
+    except ValueError as exc:
+        raise error_type('uploaded video must be inside the current user workspace') from exc
     if not resolved.is_file():
         raise error_type(f'uploaded video path is not a regular file: {raw_path!r}')
     return resolved
@@ -561,7 +560,7 @@ def _reserve_submission(
         if repeat_of is not None:
             parent = next(
                 (entry for entry in entries.values()
-                 if entry.get('response', {}).get('task_id') == repeat_of
+                 if entry.get('task_id') == repeat_of
                  and entry.get('scope') == operation_scope
                  and entry.get('endpoint') == endpoint
                  and entry.get('request') == request),
@@ -589,7 +588,7 @@ def _reserve_submission(
             )
         if existing.get('endpoint', endpoint) != endpoint:
             raise error_type('idempotency_key has already been used for a different endpoint')
-        if 'response' not in existing:
+        if 'task_id' not in existing:
             raise error_type(
                 f'{operation} submission outcome is unknown; the prior request may '
                 'have reached the backend. Do not resubmit automatically. Reconcile '
@@ -692,7 +691,6 @@ def _render_processing_result(payload: dict[str, Any]) -> tuple[str, dict[str, A
             'task_id': payload['task_id'],
             'status': payload['status'],
             'dataset_id': payload['dataset_id'],
-            'manifest_path': payload['manifest_path'],
         },
     )
 
@@ -707,7 +705,6 @@ def _render_training_result(
             'task_id': payload['task_id'],
             'status': payload['status'],
             'model_id': payload['model_id'],
-            'metadata_path': payload['metadata_path'],
         },
     )
 
@@ -750,218 +747,45 @@ def _locked_registry(
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _beijing_timestamp() -> str:
-    return (
-        datetime.now(timezone(timedelta(hours=8)))
-        .replace(tzinfo=None)
-        .isoformat()
-    )
-
-
-def _task_record_path(
-    workspace_root: Path,
-    module: str,
-    task_id: str,
-    *,
-    error_type: type[RuntimeError],
-) -> Path:
-    if module not in _TASK_MODULES:
-        raise error_type(f'unsupported task module {module!r}')
-    if (
-        not task_id
-        or task_id in {'.', '..'}
-        or '/' in task_id
-        or '\\' in task_id
-        or Path(task_id).name != task_id
-    ):
-        raise error_type('task_id contains characters that are unsafe for task storage')
-
-    workspace = workspace_root.resolve()
-    task_directory = workspace / _TASKS_DIRECTORY / module
+def _require_owned_task(workspace_root: Path, module: str, task_id: str, error_type) -> None:
     try:
-        task_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        resolved_directory = task_directory.resolve(strict=True)
-        resolved_directory.relative_to(workspace)
-    except (OSError, ValueError) as exc:
-        raise error_type(f'failed to prepare {module} task directory: {exc}') from exc
-    return resolved_directory / f'{task_id}.json'
+        require_task(workspace_root, module, task_id)
+    except (ValueError, OSError) as exc:
+        raise error_type(str(exc)) from exc
 
 
-@contextmanager
-def _locked_workspace_records(
-    workspace_root: Path,
-    *,
-    error_type: type[RuntimeError],
-) -> Iterator[None]:
-    """Serialize workspace-record updates across threads and Harness processes."""
-    state_dir = workspace_root.resolve() / _BUSINESS_FUNCTIONS_DIRECTORY
+def _persist_task_submission(workspace_root, module, payload, inputs, *, error_type):
+    # Initialize pending only for new IDs; replay must preserve checked status.
     try:
-        state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        lock_path = state_dir / _WORKSPACE_RECORD_LOCK_FILE
-        with _WORKSPACE_RECORD_LOCK:
-            with lock_path.open('a+', encoding='utf-8') as lock_file:
-                try:
-                    os.chmod(lock_path, 0o600)
-                except OSError:
-                    pass
-                try:
-                    import fcntl
-
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                except ImportError:
-                    fcntl = None  # type: ignore[assignment]
-                try:
-                    yield
-                finally:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    except OSError as exc:
-        raise error_type(f'failed to lock task records: {exc}') from exc
+        add_task_id(workspace_root, module, payload['task_id'])
+    except (ValueError, OSError) as exc:
+        raise error_type(f'failed to save task ID; backend task is {payload["task_id"]}: {exc}') from exc
 
 
-def _read_task_record(
-    task_path: Path,
-    *,
-    error_type: type[RuntimeError],
-) -> dict[str, Any] | None:
-    if not task_path.exists():
-        return None
-    try:
-        payload = json.loads(task_path.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise error_type(f'failed to read task record: {exc}') from exc
-    if not isinstance(payload, dict):
-        raise error_type('task record must be a JSON object')
-    return payload
-
-
-def _write_task_record(
-    task_path: Path,
-    record: dict[str, Any],
-    *,
-    error_type: type[RuntimeError],
-) -> None:
-    temporary_path = task_path.parent / (
-        f'.{task_path.name}.{os.getpid()}.{threading.get_ident()}.tmp'
-    )
-    try:
-        temporary_path.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
-            encoding='utf-8',
+def _validate_ready_dataset_manifest(workspace_root, dataset_ref, scenario, timeout_seconds):
+    # Resolve this user's dataset from live processing results, not local files.
+    failures = []
+    for task_id in read_task_ids(workspace_root, 'processing'):
+        endpoint = _result_endpoint(
+            os.environ.get(VIDEO_PROCESSING_API_ENV, ''), task_id,
+            api_env=VIDEO_PROCESSING_API_ENV, operation='video processing',
+            error_type=ModelTrainingError,
         )
-        os.chmod(temporary_path, 0o600)
-        temporary_path.replace(task_path)
-    except (OSError, TypeError, ValueError) as exc:
         try:
-            temporary_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise error_type(f'failed to persist task record: {exc}') from exc
-
-
-def _base_task_record(
-    module: str,
-    task_id: str,
-    timestamp: str,
-) -> dict[str, Any]:
-    return {
-        'schema_version': _TASK_RECORD_SCHEMA_VERSION,
-        'task_id': task_id,
-        'module': module,
-        'scenario': None,
-        'status': None,
-        'is_terminal': False,
-        'result_ready': False,
-        'idempotency_key': None,
-        'created_at': timestamp,
-        'updated_at': timestamp,
-        'request': None,
-        'result': None,
-    }
-
-
-def _persist_task_submission(
-    workspace_root: Path,
-    module: str,
-    payload: dict[str, Any],
-    request: dict[str, Any],
-    *,
-    error_type: type[RuntimeError],
-) -> None:
-    task_id = str(payload['task_id'])
-    with _locked_workspace_records(workspace_root, error_type=error_type):
-        task_path = _task_record_path(
-            workspace_root,
-            module,
-            task_id,
-            error_type=error_type,
-        )
-        existing = _read_task_record(task_path, error_type=error_type)
-        timestamp = _beijing_timestamp()
-        record = (
-            dict(existing)
-            if existing is not None
-            else _base_task_record(module, task_id, timestamp)
-        )
-        existing_key = record.get('idempotency_key')
-        request_key = payload['idempotency_key']
-        if existing_key not in {None, request_key}:
-            raise error_type(
-                f'task_id {task_id!r} is already associated with another request'
-            )
-
-        record.update(
-            {
-                'schema_version': _TASK_RECORD_SCHEMA_VERSION,
-                'task_id': task_id,
-                'module': module,
-                'scenario': payload['scenario'],
-                'idempotency_key': request_key,
-                'updated_at': timestamp,
-                'request': request,
-                'last_submission_replayed': bool(
-                    payload.get('idempotency_replayed', False)
-                ),
-            }
-        )
-        if existing is None or not isinstance(record.get('status'), str):
-            record['status'] = payload['status']
-            record['is_terminal'] = False
-            record['result_ready'] = False
-        _write_task_record(task_path, record, error_type=error_type)
-
-
-def _persist_task_status(
-    workspace_root: Path,
-    module: str,
-    payload: dict[str, Any],
-    *,
-    error_type: type[RuntimeError],
-) -> None:
-    task_id = str(payload['task_id'])
-    with _locked_workspace_records(workspace_root, error_type=error_type):
-        task_path = _task_record_path(
-            workspace_root,
-            module,
-            task_id,
-            error_type=error_type,
-        )
-        timestamp = _beijing_timestamp()
-        record = _read_task_record(task_path, error_type=error_type)
-        if record is None:
-            record = _base_task_record(module, task_id, timestamp)
-        record.update(
-            {
-                'schema_version': _TASK_RECORD_SCHEMA_VERSION,
-                'task_id': task_id,
-                'module': module,
-                'status': payload['status'],
-                'is_terminal': payload['is_terminal'],
-                'result_ready': payload['result_ready'],
-                'updated_at': timestamp,
-            }
-        )
-        _write_task_record(task_path, record, error_type=error_type)
+            manifest = _get_processing_backend_manifest(endpoint, timeout_seconds)
+        except VideoProcessingError as exc:
+            failures.append(str(exc))
+            continue
+        if manifest.get('dataset_id') != dataset_ref:
+            continue
+        if manifest.get('scenario') != scenario:
+            raise ModelTrainingError('dataset scenario does not match training scenario')
+        if manifest.get('status') != 'ready':
+            raise ModelTrainingError('dataset is not ready for training')
+        return
+    if failures:
+        raise ModelTrainingError('dataset could not be verified from live processing results; some queries failed or are not ready')
+    raise ModelTrainingError('dataset_id was not found in the current user processing results')
 
 
 def _get_business_task_status(
@@ -975,12 +799,13 @@ def _get_business_task_status(
     action: str,
     error_type: type[RuntimeError],
 ) -> tuple[str, dict[str, Any]]:
-    """Query, validate, persist, and render a Business task status."""
+    """Query a user-owned task and refresh its cached index status."""
     task_id = _require_string(
         arguments,
         'task_id',
         error_type=error_type,
     )
+    _require_owned_task(workspace_root, task_module, task_id, error_type)
     endpoint = _status_endpoint(
         os.environ.get(api_env, ''),
         task_id,
@@ -998,6 +823,10 @@ def _get_business_task_status(
         raise error_type(
             f'{operation} status API returned unsupported status {status!r}'
         )
+    try:
+        update_task_status(workspace_root, task_module, task_id, status)
+    except (ValueError, OSError) as exc:
+        raise error_type(f'failed to update task status index for {task_id}: {exc}') from exc
 
     payload = {
         'task_id': task_id,
@@ -1005,252 +834,7 @@ def _get_business_task_status(
         'is_terminal': status in {'done', 'failed'},
         'result_ready': status == 'done',
     }
-    _persist_task_status(
-        workspace_root,
-        task_module,
-        payload,
-        error_type=error_type,
-    )
     return _render_status_result(payload, action=action)
-
-
-def _persist_task_result(
-    workspace_root: Path,
-    module: str,
-    payload: dict[str, Any],
-    *,
-    error_type: type[RuntimeError],
-) -> None:
-    task_id = str(payload['task_id'])
-    with _locked_workspace_records(workspace_root, error_type=error_type):
-        task_path = _task_record_path(
-            workspace_root,
-            module,
-            task_id,
-            error_type=error_type,
-        )
-        timestamp = _beijing_timestamp()
-        record = _read_task_record(task_path, error_type=error_type)
-        if record is None:
-            record = _base_task_record(module, task_id, timestamp)
-        record.update(
-            {
-                'schema_version': _TASK_RECORD_SCHEMA_VERSION,
-                'task_id': task_id,
-                'module': module,
-                'status': payload['status'],
-                'is_terminal': True,
-                'result_ready': True,
-                'updated_at': timestamp,
-                'result': {
-                    key: value
-                    for key, value in payload.items()
-                    if key not in {'task_id', 'status'}
-                },
-            }
-        )
-        _write_task_record(task_path, record, error_type=error_type)
-
-
-def _dataset_manifest_path(workspace_root: Path, dataset_id: str) -> Path:
-    if (
-        len(dataset_id) > 240
-        or dataset_id in {'.', '..'}
-        or dataset_id.startswith('.')
-        or any(
-            not character.isascii()
-            or (not character.isalnum() and character not in {'-', '_', '.'})
-            for character in dataset_id
-        )
-        or '/' in dataset_id
-        or '\\' in dataset_id
-        or Path(dataset_id).name != dataset_id
-    ):
-        raise VideoProcessingError(
-            'dataset_id contains characters that are unsafe for manifest storage'
-        )
-
-    workspace = workspace_root.resolve()
-    dataset_directory = workspace / _DATASETS_DIRECTORY
-    try:
-        dataset_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        resolved_directory = dataset_directory.resolve(strict=True)
-        resolved_directory.relative_to(workspace)
-    except (OSError, ValueError) as exc:
-        raise VideoProcessingError(
-            f'failed to prepare dataset manifest directory: {exc}'
-        ) from exc
-    return resolved_directory / f'{dataset_id}.json'
-
-
-def _persist_dataset_manifest(
-    workspace_root: Path,
-    manifest: dict[str, Any],
-) -> str:
-    dataset_id = str(manifest['dataset_id'])
-    with _locked_workspace_records(
-        workspace_root,
-        error_type=VideoProcessingError,
-    ):
-        manifest_path = _dataset_manifest_path(workspace_root, dataset_id)
-        temporary_path = manifest_path.parent / (
-            f'.{manifest_path.name}.{os.getpid()}.{threading.get_ident()}.tmp'
-        )
-        try:
-            temporary_path.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
-                + '\n',
-                encoding='utf-8',
-            )
-            os.chmod(temporary_path, 0o600)
-            temporary_path.replace(manifest_path)
-        except (OSError, TypeError, ValueError) as exc:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise VideoProcessingError(
-                f'failed to persist dataset manifest: {exc}'
-            ) from exc
-
-    return manifest_path.relative_to(workspace_root.resolve()).as_posix()
-
-
-def _validate_ready_dataset_manifest(
-    workspace_root: Path,
-    dataset_ref: str,
-    scenario: str,
-) -> None:
-    """Validate the Harness-owned dataset manifest before training submission."""
-    if (
-        len(dataset_ref) > 240
-        or dataset_ref in {'.', '..'}
-        or dataset_ref.startswith('.')
-        or any(
-            not character.isascii()
-            or (not character.isalnum() and character not in {'-', '_', '.'})
-            for character in dataset_ref
-        )
-        or '/' in dataset_ref
-        or '\\' in dataset_ref
-        or Path(dataset_ref).name != dataset_ref
-    ):
-        raise ModelTrainingError(
-            'dataset_ref contains characters that are unsafe for manifest lookup'
-        )
-
-    workspace = workspace_root.resolve()
-    manifest_path = workspace / _DATASETS_DIRECTORY / f'{dataset_ref}.json'
-    if manifest_path.is_symlink():
-        raise ModelTrainingError('dataset manifest must not be a symbolic link')
-
-    try:
-        resolved_manifest = manifest_path.resolve(strict=True)
-        resolved_manifest.relative_to(workspace / _DATASETS_DIRECTORY)
-        if not resolved_manifest.is_file():
-            raise ModelTrainingError(
-                f'dataset manifest is not a regular file for dataset_ref {dataset_ref!r}'
-            )
-        manifest = json.loads(resolved_manifest.read_text(encoding='utf-8'))
-    except FileNotFoundError as exc:
-        raise ModelTrainingError(
-            f'dataset manifest was not found for dataset_ref {dataset_ref!r}'
-        ) from exc
-    except json.JSONDecodeError as exc:
-        raise ModelTrainingError(
-            f'dataset manifest contains invalid JSON for dataset_ref {dataset_ref!r}'
-        ) from exc
-    except (OSError, ValueError) as exc:
-        raise ModelTrainingError(
-            f'failed to read dataset manifest for dataset_ref {dataset_ref!r}: {exc}'
-        ) from exc
-
-    if not isinstance(manifest, dict):
-        raise ModelTrainingError(
-            f'dataset manifest must be a JSON object for dataset_ref {dataset_ref!r}'
-        )
-    manifest_dataset_id = manifest.get('dataset_id')
-    if manifest_dataset_id != dataset_ref:
-        raise ModelTrainingError(
-            'dataset manifest dataset_id does not match '
-            f'dataset_ref {dataset_ref!r}'
-        )
-    manifest_scenario = manifest.get('scenario')
-    if manifest_scenario != scenario:
-        raise ModelTrainingError(
-            'dataset manifest scenario does not match '
-            f'training scenario {scenario!r}'
-        )
-    manifest_status = manifest.get('status')
-    if manifest_status != 'ready':
-        raise ModelTrainingError(
-            f'dataset {dataset_ref!r} is not ready '
-            f'(manifest status: {manifest_status!r})'
-        )
-
-
-def _model_metadata_path(workspace_root: Path, model_id: str) -> Path:
-    if (
-        len(model_id) > 240
-        or model_id in {'.', '..'}
-        or model_id.startswith('.')
-        or any(
-            not character.isascii()
-            or (not character.isalnum() and character not in {'-', '_', '.'})
-            for character in model_id
-        )
-        or '/' in model_id
-        or '\\' in model_id
-        or Path(model_id).name != model_id
-    ):
-        raise ModelTrainingError(
-            'model_id contains characters that are unsafe for metadata storage'
-        )
-
-    workspace = workspace_root.resolve()
-    model_directory = workspace / _MODELS_DIRECTORY
-    try:
-        model_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        resolved_directory = model_directory.resolve(strict=True)
-        resolved_directory.relative_to(workspace)
-    except (OSError, ValueError) as exc:
-        raise ModelTrainingError(
-            f'failed to prepare model metadata directory: {exc}'
-        ) from exc
-    return resolved_directory / f'{model_id}.json'
-
-
-def _persist_model_metadata(
-    workspace_root: Path,
-    metadata: dict[str, Any],
-) -> str:
-    model_id = str(metadata['model_id'])
-    with _locked_workspace_records(
-        workspace_root,
-        error_type=ModelTrainingError,
-    ):
-        metadata_path = _model_metadata_path(workspace_root, model_id)
-        temporary_path = metadata_path.parent / (
-            f'.{metadata_path.name}.{os.getpid()}.{threading.get_ident()}.tmp'
-        )
-        try:
-            temporary_path.write_text(
-                json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True)
-                + '\n',
-                encoding='utf-8',
-            )
-            os.chmod(temporary_path, 0o600)
-            temporary_path.replace(metadata_path)
-        except (OSError, TypeError, ValueError) as exc:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise ModelTrainingError(
-                f'failed to persist model metadata: {exc}'
-            ) from exc
-
-    return metadata_path.relative_to(workspace_root.resolve()).as_posix()
 
 
 def submit_video_analysis(
@@ -1326,7 +910,10 @@ def submit_video_analysis(
             operation='video-analysis', error_type=VideoAnalysisError,
         )
         if existing is not None:
-            response_payload = dict(existing['response'])
+            response_payload = {
+                'task_id': existing['task_id'], 'scenario': scenario,
+                'idempotency_key': idempotency_key, **{'video_ref': {'type': ref_type, 'path': raw_path}},
+            }
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
             _persist_task_submission(
@@ -1357,7 +944,7 @@ def submit_video_analysis(
             'idempotency_replayed': False,
         }
         entries[idempotency_key].update({
-            'response': response_payload,
+            'task_id': task_id,
             'state': 'submitted',
         })
         _write_registry(workspace_root, registry)
@@ -1440,7 +1027,10 @@ def submit_video_processing(
             operation='video-processing', error_type=VideoProcessingError,
         )
         if existing is not None:
-            response_payload = dict(existing['response'])
+            response_payload = {
+                'task_id': existing['task_id'], 'scenario': scenario,
+                'idempotency_key': idempotency_key, **{'raw_video_refs': list(raw_video_refs)},
+            }
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
             _persist_task_submission(
@@ -1462,7 +1052,7 @@ def submit_video_processing(
             'idempotency_replayed': False,
         }
         entries[idempotency_key].update({
-            'response': response_payload,
+            'task_id': task_id,
             'state': 'submitted',
         })
         _write_registry(
@@ -1510,6 +1100,7 @@ def submit_model_training(
         workspace_root,
         dataset_ref,
         scenario,
+        timeout_seconds,
     )
     endpoint = _training_endpoint(
         os.environ.get(MODEL_TRAINING_API_ENV, '')
@@ -1539,7 +1130,10 @@ def submit_model_training(
             operation='model-training', error_type=ModelTrainingError,
         )
         if existing is not None:
-            response_payload = dict(existing['response'])
+            response_payload = {
+                'task_id': existing['task_id'], 'scenario': scenario,
+                'idempotency_key': idempotency_key, **{'dataset_ref': dataset_ref},
+            }
             response_payload['status'] = 'pending'
             response_payload['idempotency_replayed'] = True
             _persist_task_submission(
@@ -1565,7 +1159,7 @@ def submit_model_training(
             'idempotency_replayed': False,
         }
         entries[idempotency_key].update({
-            'response': response_payload,
+            'task_id': task_id,
             'state': 'submitted',
         })
         _write_registry(
@@ -1652,6 +1246,7 @@ def get_video_analysis_result(
 ) -> tuple[str, dict[str, Any]]:
     """Return the completed video-analysis result as a JSON object."""
     task_id = _require_string(arguments, 'task_id')
+    _require_owned_task(workspace_root, 'analysis', task_id, VideoAnalysisError)
     endpoint = _result_endpoint(
         base_url or os.environ.get(VIDEO_ANALYSIS_API_ENV, ''),
         task_id,
@@ -1663,12 +1258,6 @@ def get_video_analysis_result(
         'result_count': len(results),
         'results': results,
     }
-    _persist_task_result(
-        workspace_root,
-        'analysis',
-        payload,
-        error_type=VideoAnalysisError,
-    )
     return _render_analysis_result(payload)
 
 
@@ -1684,6 +1273,7 @@ def get_video_processing_result(
         'task_id',
         error_type=VideoProcessingError,
     )
+    _require_owned_task(workspace_root, 'processing', task_id, VideoProcessingError)
     endpoint = _result_endpoint(
         os.environ.get(VIDEO_PROCESSING_API_ENV, ''),
         task_id,
@@ -1693,19 +1283,12 @@ def get_video_processing_result(
     )
     manifest = _get_processing_backend_manifest(endpoint, timeout_seconds)
     dataset_id = str(manifest['dataset_id'])
-    manifest_path = _persist_dataset_manifest(workspace_root, manifest)
     payload = {
         'task_id': task_id,
         'status': 'done',
         'dataset_id': dataset_id,
-        'manifest_path': manifest_path,
+        'manifest': manifest,
     }
-    _persist_task_result(
-        workspace_root,
-        'processing',
-        payload,
-        error_type=VideoProcessingError,
-    )
     return _render_processing_result(payload)
 
 
@@ -1715,12 +1298,13 @@ def get_model_training_result(
     workspace_root: Path,
     timeout_seconds: float,
 ) -> tuple[str, dict[str, Any]]:
-    """Return and persist metadata for a completed model-training task."""
+    """Return live metadata for a completed model-training task."""
     task_id = _require_string(
         arguments,
         'task_id',
         error_type=ModelTrainingError,
     )
+    _require_owned_task(workspace_root, 'training', task_id, ModelTrainingError)
     endpoint = _result_endpoint(
         os.environ.get(MODEL_TRAINING_API_ENV, ''),
         task_id,
@@ -1730,17 +1314,52 @@ def get_model_training_result(
     )
     metadata = _get_model_training_backend_metadata(endpoint, timeout_seconds)
     model_id = str(metadata['model_id'])
-    metadata_path = _persist_model_metadata(workspace_root, metadata)
     payload = {
         'task_id': task_id,
         'status': 'done',
         'model_id': model_id,
-        'metadata_path': metadata_path,
+        'metadata': metadata,
     }
-    _persist_task_result(
-        workspace_root,
-        'training',
-        payload,
-        error_type=ModelTrainingError,
-    )
     return _render_training_result(payload)
+
+
+def _list_business_tasks(arguments, *, workspace_root, timeout_seconds, module, result_function):
+    """List cached statuses and fetch live results only for indexed done tasks."""
+    tasks = []
+    for entry in read_tasks(workspace_root, module):
+        task_id, status = entry['task_id'], entry['status']
+        item = {
+            'task_id': task_id, 'status': status,
+            'is_terminal': status in {'done', 'failed'}, 'result_ready': status == 'done',
+        }
+        if status == 'done':
+            try:
+                content, _ = result_function(
+                    {'task_id': task_id}, workspace_root=workspace_root, timeout_seconds=timeout_seconds)
+                item['result'] = json.loads(content)
+            except (RuntimeError, ValueError, OSError) as exc:
+                item['error'] = str(exc)
+        tasks.append(item)
+    payload = {'tasks': tasks, 'task_count': len(tasks)}
+    prefix = 'model' if module == 'training' else 'video'
+    return json.dumps(payload, ensure_ascii=False, indent=2), {
+        'action': f'list_{prefix}_{module}_tasks', 'task_count': len(tasks),
+    }
+
+
+def list_video_analysis_tasks(arguments: dict[str, Any], *, workspace_root: Path, timeout_seconds: float):
+    return _list_business_tasks(arguments, workspace_root=workspace_root, timeout_seconds=timeout_seconds,
+                                module='analysis',
+                                result_function=get_video_analysis_result)
+
+
+def list_video_processing_tasks(arguments: dict[str, Any], *, workspace_root: Path, timeout_seconds: float):
+    return _list_business_tasks(arguments, workspace_root=workspace_root, timeout_seconds=timeout_seconds,
+                                module='processing',
+                                result_function=get_video_processing_result)
+
+
+def list_model_training_tasks(arguments: dict[str, Any], *, workspace_root: Path, timeout_seconds: float):
+    return _list_business_tasks(arguments, workspace_root=workspace_root, timeout_seconds=timeout_seconds,
+                                module='training',
+                                result_function=get_model_training_result)
