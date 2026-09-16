@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from .agent_types import UsageStats
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
@@ -22,6 +23,8 @@ class SlashCommandResult:
     prompt: str | None = None
     output: str = ''
     transcript: tuple[dict[str, Any], ...] = ()
+    session_mutated: bool = False
+    usage: UsageStats = field(default_factory=UsageStats)
 
 
 SlashCommandHandler = Callable[['LocalCodingAgent', str, str], SlashCommandResult]
@@ -1085,7 +1088,8 @@ def _handle_compact(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sl
             f'  Tokens before: ~{result.pre_compact_token_count:,}  '
             f'→  after: ~{result.post_compact_token_count:,}'
         )
-    return _local_result(input_text, '\n'.join(lines))
+    return replace(_local_result(input_text, '\n'.join(lines)),
+                   session_mutated=True, usage=result.usage)
 
 
 def _handle_cost(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:

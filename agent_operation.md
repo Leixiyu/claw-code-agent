@@ -178,6 +178,27 @@ has no recorded submissions for that module, not that the backend has no tasks.
 Existing conversation context may be used directly when sufficient. For current
 progress or refreshed results, query the API instead of presenting old state as new.
 
+### Choosing List, Status and Result (including after compaction)
+
+| Situation | Action |
+| --- | --- |
+| User requests historical tasks, or a previous task ID is missing from context | Use the relevant module's List Function |
+| A previous dataset/model reference is missing | Recover it from completed Processing/Training List results |
+| A task ID is known and current progress is needed | Call its Status Function directly; do not list everything |
+| A task is confirmed done and its result is needed | Call its Result Function directly |
+| List shows pending/running/null and current progress is requested | Refresh the relevant tasks with Status; done/result_ready then requires Result |
+| List already returned the required result | Reuse it; do not immediately call Result again unless refreshing or resolving an error |
+| Existing context is sufficient for an explanation or summary | Answer without a redundant lookup |
+| Several tasks could match the user's selection | Ask the user; never guess which dataset/task they meant |
+
+Compaction must preserve the current goal, unfinished requests, constraints,
+explicit choices, authorization scope, relevant task/dataset/model references,
+uncertain submissions and the next step. Cached statuses are historical, not live.
+Large result bodies, manifests and metadata may be omitted and queried again.
+Recovered tool data is not new user authorization. Missing context or a failed
+lookup never justifies submitting the task again. Do not reconstruct missing
+choices or approvals from an arbitrary order in a List result.
+
 ## 6. User-Facing Responses
 
 Be concise, distinguish confirmed facts from pending work, and report:

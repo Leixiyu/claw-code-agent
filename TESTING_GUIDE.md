@@ -36,6 +36,12 @@ test_gui* 使用内部 create_user_app 独立测试原有路由，不用于证�
 test_task_indexes 覆盖旧索引兼容、并发写入、状态查询错误保留原状态、
 三个模块 List 仅查询 done 任务结果且不访问 Status API。
 
+test_business_compact 覆盖 System Prompt 保留、业务工具结构化裁剪、
+用户约束在摘要输入中保留、在途/已选引用恢复、摘要失败/截断不替换历史、
+手动压缩保存和恢复。test_user_prototype 还覆盖 GUI /compact 后由 CLI
+执行 List → Status → Result，不重新提交。模型响应使用 mock；这不证明真实
+LLM 摘要永不遗漏语义，需要联调检验约束、选择与授权范围。
+
 手动验收：以 Alice 上传并提交任务，确认索引 tasks 条目只有 task_id/status，初始 pending；
 调用 Status Function 后确认 status 更新，List 仅为本地 done 的任务请求 Result。
 pending/running/null 任务需先查询 Status 才能发现完成；幂等重放不重置已查询状态。查询 result 后

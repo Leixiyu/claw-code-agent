@@ -14,6 +14,10 @@ from .agent_context import clear_context_caches
 from .agent_context import render_context_report as render_agent_context_report
 from .agent_context_usage import collect_context_usage, estimate_tokens, format_context_usage
 from .compact import compact_conversation
+from .business_context import (
+    business_reference_records, compact_business_tool, is_business_context,
+    is_protected_instruction,
+)
 from .ask_user_runtime import AskUserRuntime
 from .agent_registry import (
     delete_agent_definition,
@@ -447,17 +451,24 @@ class LocalCodingAgent:
                 )
         slash_result = preprocess_slash_command(self, prompt)
         if slash_result.handled and not slash_result.should_query:
-            return AgentRunResult(
+            result = AgentRunResult(
                 final_output=slash_result.output,
                 turns=0,
                 tool_calls=0,
                 transcript=slash_result.transcript,
                 session_id=self.active_session_id,
                 session_path=self.last_session_path,
+                usage=slash_result.usage,
+                total_cost_usd=self.model_config.pricing.estimate_cost_usd(slash_result.usage),
+                file_history=tuple(existing_file_history),
                 scratchpad_directory=(
                     str(scratchpad_directory) if scratchpad_directory is not None else None
                 ),
             )
+            if slash_result.session_mutated and self.last_session is not None:
+                result = self._persist_session(self.last_session, result)
+                self.last_run_result = result
+            return result
 
         effective_prompt = self._apply_hook_policy_before_prompt_hooks(
             slash_result.prompt or prompt
@@ -1397,7 +1408,12 @@ class LocalCodingAgent:
             budget_config=self.runtime_config.budget_config,
             output_schema=self.runtime_config.output_schema,
         )
-        if not snapshot.exceeds_soft_limit and not snapshot.exceeds_hard_limit:
+        business_threshold = self.runtime_config.auto_compact_threshold_tokens if is_business_context(self, session) else None
+        def below_limits(value):
+            return (not value.exceeds_soft_limit and not value.exceeds_hard_limit
+                    and (not business_threshold or business_threshold <= 0
+                         or value.projected_input_tokens <= business_threshold))
+        if below_limits(snapshot):
             return PromptPreflightResult()
 
         stream_events.append(
@@ -1414,6 +1430,8 @@ class LocalCodingAgent:
         )
 
         target_tokens = snapshot.soft_input_limit_tokens
+        if business_threshold and business_threshold > 0:
+            target_tokens = min(target_tokens, business_threshold)
         if snapshot.exceeds_hard_limit:
             target_tokens = snapshot.hard_input_limit_tokens
         if target_tokens < 0:
@@ -1444,7 +1462,7 @@ class LocalCodingAgent:
                     'exceeds_soft_limit': recovered.exceeds_soft_limit,
                 }
             )
-            if not recovered.exceeds_soft_limit and not recovered.exceeds_hard_limit:
+            if below_limits(recovered):
                 return PromptPreflightResult()
             snapshot = recovered
 
@@ -1491,27 +1509,18 @@ class LocalCodingAgent:
                         'exceeds_soft_limit': recovered.exceeds_soft_limit,
                     }
                 )
-                if not recovered.exceeds_soft_limit and not recovered.exceeds_hard_limit:
+                if below_limits(recovered):
                     return PromptPreflightResult(
                         usage_increment=compact_result.usage,
                         model_calls_increment=1,
                     )
                 snapshot = recovered
-                if compact_result.usage.total_tokens:
-                    return PromptPreflightResult(
-                        usage_increment=compact_result.usage,
-                        model_calls_increment=1,
-                        stop_reason=(
-                            'prompt_too_long'
-                            if recovered.exceeds_hard_limit
-                            else None
-                        ),
-                        reason=(
-                            self._build_prompt_length_error(recovered)
-                            if recovered.exceeds_hard_limit
-                            else None
-                        ),
-                    )
+                return PromptPreflightResult(
+                    usage_increment=compact_result.usage,
+                    model_calls_increment=1,
+                    stop_reason='prompt_too_long' if recovered.exceeds_hard_limit else None,
+                    reason=self._build_prompt_length_error(recovered) if recovered.exceeds_hard_limit else None,
+                )
             else:
                 self._compact_consecutive_failures += 1
                 stream_events.append(
@@ -1702,6 +1711,9 @@ class LocalCodingAgent:
             index
             for index in range(prefix_count, max(len(session.messages) - tail_count, prefix_count))
             if self._message_can_be_snipped(session.messages[index])
+            and not is_protected_instruction(session.messages[index])
+            and (not is_business_context(self, session)
+                 or compact_business_tool(session.messages[index]) is not None)
         ]
         if not candidate_indexes:
             return False
@@ -1713,7 +1725,8 @@ class LocalCodingAgent:
                 break
             message = session.messages[index]
             original_tokens = estimate_tokens(message.content, self.model_config.model)
-            replacement = self._build_snipped_message_content(message)
+            replacement = (compact_business_tool(message) if is_business_context(self, session)
+                           else self._build_snipped_message_content(message))
             replacement_tokens = estimate_tokens(replacement, self.model_config.model)
             if replacement_tokens >= original_tokens:
                 continue
@@ -1732,6 +1745,8 @@ class LocalCodingAgent:
                     'snipped_from_kind': message.metadata.get('kind'),
                     'snipped_from_lineage_id': message.metadata.get('lineage_id'),
                     'snipped_from_revision': message.metadata.get('revision'),
+                    **({'business_references': business_reference_records(message)}
+                       if is_business_context(self, session) else {}),
                 },
             )
             delta = original_tokens - replacement_tokens
@@ -1764,6 +1779,10 @@ class LocalCodingAgent:
         usage_total: int,
         reactive: bool,
     ) -> bool:
+        if is_business_context(self, session):
+            # Never lose user decisions to fixed-length previews before semantic
+            # summarization. Preflight will request a business-aware LLM summary.
+            return False
         prefix_count = self._compact_prefix_count(session)
         preserve_messages = max(self.runtime_config.compact_preserve_messages, 0)
         if reactive:
@@ -1775,7 +1794,9 @@ class LocalCodingAgent:
         compact_end = len(session.messages) - tail_count
         if compact_end <= prefix_count:
             return False
-        candidates = session.messages[prefix_count:compact_end]
+        segment = session.messages[prefix_count:compact_end]
+        protected = [message for message in segment if is_protected_instruction(message)]
+        candidates = [message for message in segment if not is_protected_instruction(message)]
         preserved_tail = list(session.messages[compact_end:])
         if not candidates:
             return False
@@ -1805,6 +1826,7 @@ class LocalCodingAgent:
         )
         session.messages = (
             session.messages[:prefix_count]
+            + protected
             + [compact_message]
             + session.messages[compact_end:]
         )

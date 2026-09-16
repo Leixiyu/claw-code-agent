@@ -249,6 +249,51 @@ class UserPrototypeTests(unittest.TestCase):
         self.assertNotIn('LEGACY_SINGLE_USER_POLICY', str(complete.call_args.args[0]))
         self.assertEqual(json.loads(path.read_text())['runtime_config']['cwd'], str(self.wa))
 
+    def test_gui_compact_then_cli_list_status_result_without_submit(self):
+        app = self.app()
+        add_task_id(self.wa, 'analysis', 'recover-a1')
+        with TestClient(app) as client:
+            client.get('/api/state', headers=self.headers)
+            agent = app.state.user_apps[self.a['user_id']].state.agent_state.agent
+            with patch.object(agent.client, 'complete', return_value=AssistantTurn('Understood', finish_reason='stop')):
+                response = client.post('/api/chat', headers=self.headers,
+                                       json={'prompt': 'Only analyze. Do not train or submit another task.'})
+                sid = response.json()['session_id']
+                for prompt in ('Please remember my restrictions.', 'Find my earlier analysis task when needed.'):
+                    response = client.post('/api/chat', headers=self.headers,
+                                           json={'prompt': prompt, 'resume_session_id': sid})
+                    self.assertEqual(response.status_code, 200)
+            with patch.object(agent.client, 'complete', return_value=AssistantTurn(
+                '<summary>Only analyze. Do not train or submit another task. '
+                'Task ID missing: use analysis List, then Status and Result.</summary>', finish_reason='stop')):
+                response = client.post('/api/chat', headers=self.headers,
+                                       json={'prompt': '/compact', 'resume_session_id': sid})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertIn('Conversation compacted', response.json()['final_output'])
+        saved_path = self.wa / 'sessions' / f'{sid}.json'
+        saved = json.loads(saved_path.read_text())
+        self.assertTrue(any(message.get('metadata', {}).get('kind') == 'compact_summary' for message in saved['messages']))
+        turns = [
+            AssistantTurn('', tool_calls=(ToolCall('recover-list', 'list_video_analysis_tasks', {}),)),
+            AssistantTurn('', tool_calls=(ToolCall('recover-status', 'get_video_analysis_status', {'task_id': 'recover-a1'}),)),
+            AssistantTurn('', tool_calls=(ToolCall('recover-result', 'get_video_analysis_result', {'task_id': 'recover-a1'}),)),
+            AssistantTurn('Recovered analysis result; no new task submitted.', finish_reason='stop'),
+        ]
+        with patch.dict(os.environ, {'AGENT_WORKSPACE': str(self.root), 'HARNESS_AUTH_DIR': str(self.store.directory),
+                                    'HARNESS_AUTH_TOKEN': self.token, 'VIDEO_ANALYSIS_API': 'analysis.test'}), patch(
+            'src.openai_compat.OpenAICompatClient.complete', side_effect=turns
+        ) as model, patch.object(business, '_get_backend_status', return_value='done') as status, patch.object(
+            business, '_get_backend_result', return_value=[{'category_id': 3}]
+        ) as result, patch.object(business, '_post_local_video') as submit, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(main(['agent-resume', sid, 'Recover my earlier analysis result']), 0)
+        submit.assert_not_called()
+        status.assert_called_once()
+        result.assert_called_once()
+        self.assertIn('Do not train or submit another task', str(model.call_args_list[0]))
+        self.assertEqual(read_tasks(self.wa, 'analysis'), [{'task_id': 'recover-a1', 'status': 'done'}])
+        self.assertIn('category_id', saved_path.read_text())
+        self.assertFalse((self.wa / 'tasks').exists())
+
     def test_expired_token_and_cross_origin_are_rejected(self):
         with TestClient(self.app()) as client:
             self.assertEqual(client.post('/api/auth/login', headers={'Origin': 'https://untrusted.test'}, json={'username': 'alice', 'password': 'test-password-alice'}).status_code, 403)

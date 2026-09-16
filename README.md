@@ -272,6 +272,7 @@ claw-code-agent/
 │   ├── agent_tools.py            # Tool definitions & execution engine
 │   ├── tool_progress.py          # User-facing activity labels for each tool
 │   ├── business_functions.py     # Analysis/Processing/Training business Functions
+│   ├── business_context.py       # Business-aware compaction and session reference checkpoints
 │   ├── auth_runtime.py           # Password hashes, expiring tokens, user identities
 │   ├── auth_cli.py               # Login/logout and local administrator commands
 │   ├── user_workspace.py         # User paths, task ID/status indexes, atomic writes
@@ -327,6 +328,7 @@ claw-code-agent/
     ├── test_video_processing.py      # Video-processing HTTP Function and Tool tests
     ├── test_model_training.py        # Model-training HTTP Function and Tool tests
     ├── test_task_indexes.py          # Cached status, legacy indexes, done-only result lookup
+    ├── test_business_compact.py      # Protected instructions, business summaries and recovery
     ├── test_agent_context.py
     ├── test_agent_context_usage.py
     ├── test_agent_prompting.py

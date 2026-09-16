@@ -23,6 +23,10 @@ from typing import TYPE_CHECKING, Any
 from .agent_context_usage import estimate_tokens
 from .agent_types import UsageStats
 from .agent_session import AgentMessage
+from .business_context import (
+    BUSINESS_COMPACT_INSTRUCTIONS, build_reference_checkpoint, is_business_context,
+    is_protected_instruction, split_compaction_messages, summary_input,
+)
 
 if TYPE_CHECKING:
     from .agent_runtime import LocalCodingAgent
@@ -213,11 +217,13 @@ _NO_TOOLS_TRAILER = (
 )
 
 
-def get_compact_prompt(custom_instructions: str | None = None) -> str:
+def get_compact_prompt(custom_instructions: str | None = None, *, business: bool = False) -> str:
     """Build the full compact prompt, optionally appending user instructions."""
     prompt = _NO_TOOLS_PREAMBLE + _BASE_COMPACT_PROMPT
     if custom_instructions and custom_instructions.strip():
         prompt += f'\n\nAdditional Instructions:\n{custom_instructions}'
+    if business:
+        prompt += '\n\n' + BUSINESS_COMPACT_INSTRUCTIONS
     prompt += _NO_TOOLS_TRAILER
     return prompt
 
@@ -435,6 +441,8 @@ def _call_compact_model(
             return None, UsageStats(), 'prompt_too_long'
         return None, UsageStats(), error_str
 
+    if turn.finish_reason == 'length' or turn.tool_calls:
+        return None, turn.usage, ERROR_INCOMPLETE_RESPONSE
     raw = turn.content or ''
     if not raw.strip():
         return None, turn.usage, 'empty_response'
@@ -471,8 +479,10 @@ def compact_conversation(
             error=ERROR_NOT_ENOUGH_MESSAGES,
         )
 
-    # --- Try session-memory-based compact first (no API call) ---
-    if custom_instructions is None:
+    business = is_business_context(agent, session)
+    protected = [message for message in session.messages if is_protected_instruction(message)]
+    # Shared HOME session-memory is not scoped to the authenticated business user.
+    if custom_instructions is None and not business:
         from .session_memory_compact import try_session_memory_compaction
 
         last_summarized_id = getattr(agent, '_last_summarized_message_id', None)
@@ -483,17 +493,12 @@ def compact_conversation(
         )
         if sm_result is not None:
             # Apply the session-memory compaction to the session
-            prefix_count = 0
-            for msg in session.messages:
-                if msg.metadata.get('kind') == 'compact_boundary':
-                    prefix_count += 1
-                else:
-                    break
             session.messages = (
-                session.messages[:prefix_count]
+                protected
                 + [sm_result.boundary_message]
                 + sm_result.summary_messages
-                + sm_result.messages_to_keep
+                + [message for message in sm_result.messages_to_keep
+                   if not is_protected_instruction(message)]
             )
             # Reset the summarized ID
             agent._last_summarized_message_id = None
@@ -504,25 +509,11 @@ def compact_conversation(
         getattr(agent.runtime_config, 'compact_preserve_messages', 4), 1
     )
 
-    prefix_count = 0
-    for msg in session.messages:
-        if msg.metadata.get('kind') == 'compact_boundary':
-            prefix_count += 1
-        else:
-            break
-
-    total = len(session.messages)
-    tail_count = min(preserve_count, max(total - prefix_count, 0))
-    compact_end = total - tail_count
-
-    if compact_end <= prefix_count:
-        return CompactionResult(
-            boundary_message=_build_boundary('Not enough messages after prefix.'),
-            error=ERROR_NOT_ENOUGH_MESSAGES,
-        )
-
-    candidates = list(session.messages[prefix_count:compact_end])
-    preserved_tail = list(session.messages[compact_end:])
+    protected, candidates, preserved_tail = split_compaction_messages(session.messages, preserve_count)
+    checkpoints = build_reference_checkpoint(session.messages) if business else []
+    if business:
+        preserved_tail = [summary_input(message) for message in preserved_tail
+                          if message.metadata.get('kind') != 'business_references']
 
     if not candidates:
         return CompactionResult(
@@ -535,10 +526,16 @@ def compact_conversation(
     pre_tokens = sum(estimate_tokens(m.content, model) for m in session.messages)
 
     # ---- Build the compact request ----
-    compact_prompt = get_compact_prompt(custom_instructions)
+    compact_prompt = get_compact_prompt(custom_instructions, business=business)
 
     # ---- PTL retry loop ----
-    messages_to_summarize = candidates
+    # Recent choices/revocations determine which older facts are still relevant.
+    # Include the protected tail as summary context while also keeping it verbatim
+    # (except condensed tool bodies) in the resulting conversation.
+    messages_to_summarize = (
+        [summary_input(message) for message in candidates + preserved_tail]
+        if business else candidates
+    )
     ptl_retries = 0
     total_usage = UsageStats()
     raw_summary: str | None = None
@@ -546,9 +543,12 @@ def compact_conversation(
     for attempt in range(MAX_PTL_RETRIES + 1):
         api_messages: list[dict[str, Any]] = []
 
-        for part in session.system_prompt_parts:
-            if part.strip():
-                api_messages.append({'role': 'system', 'content': part})
+        if protected:
+            api_messages.extend(message.to_openai_message() for message in protected)
+        else:
+            for part in session.system_prompt_parts:
+                if part.strip():
+                    api_messages.append({'role': 'system', 'content': part})
 
         for msg in messages_to_summarize:
             api_messages.append(msg.to_openai_message())
@@ -561,6 +561,14 @@ def compact_conversation(
         if error != 'prompt_too_long':
             raw_summary = content
             break
+
+        if business:
+            # Dropping old rounds could silently remove unresolved restrictions or
+            # approvals. Keep the session intact and let the caller stop safely.
+            return CompactionResult(
+                boundary_message=_build_boundary('Business history cannot be safely truncated.'),
+                error=ERROR_PROMPT_TOO_LONG, usage=total_usage,
+            )
 
         # PTL error — try truncating oldest API-round groups
         ptl_retries += 1
@@ -616,8 +624,9 @@ def compact_conversation(
 
     # Replace session messages in-place
     session.messages = (
-        session.messages[:prefix_count]
+        protected
         + [boundary, summary_msg]
+        + checkpoints
         + preserved_tail
     )
 
@@ -626,13 +635,13 @@ def compact_conversation(
 
     return CompactionResult(
         boundary_message=boundary,
-        summary_messages=[summary_msg],
+        summary_messages=[summary_msg] + checkpoints,
         messages_to_keep=preserved_tail,
         pre_compact_token_count=pre_tokens,
         post_compact_token_count=post_tokens,
         true_post_compact_token_count=sum(
             estimate_tokens(m.content, model)
-            for m in [boundary, summary_msg] + preserved_tail
+            for m in session.messages
         ),
         summary_text=summary_text,
         usage=total_usage,
