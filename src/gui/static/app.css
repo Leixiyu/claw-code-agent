@@ -175,7 +175,7 @@ body {
   color: var(--text-muted);
   font: 10px monospace;
 }
-.session-item .session-copy {
+.session-item .session-copy, .session-item .session-delete {
   align-self: flex-start;
   font-size: 11px;
   width: auto;
@@ -183,6 +183,9 @@ body {
   white-space: nowrap;
   padding: 4px 6px;
 }
+.session-actions { display: flex; gap: 8px; }
+.session-item .session-delete { color: var(--text-muted); }
+#clear-sessions-btn { margin: 4px 0 8px; cursor: pointer; }
 #session-list-info { font-size: 11px; color: var(--text-muted); }
 
 .empty-state {

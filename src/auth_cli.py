@@ -18,13 +18,15 @@ def _positive_limit(value):
 
 
 def add_auth_commands(subparsers):
-    for name in ('users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info'):
+    for name in ('users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info', 'session-delete', 'sessions-clear'):
         help_text = ('Show a saved session summary for the logged-in user (does not resume chat)'
                      if name == 'session-info' else f'Prototype user management: {name}')
         parser = subparsers.add_parser(name, help=help_text)
         parser.add_argument('--workspace-root', default=os.environ.get('AGENT_WORKSPACE') or '.')
-        if name == 'session-info':
+        if name in {'session-info', 'session-delete'}:
             parser.add_argument('session_id')
+        if name in {'session-delete', 'sessions-clear'}:
+            parser.add_argument('--yes', action='store_true', help='Confirm permanent deletion without prompting')
         if name == 'sessions':
             parser.add_argument('--limit', type=_positive_limit, default=20)
         if name in {'users-create', 'login', 'migrate-user-data'}:
@@ -61,6 +63,41 @@ def handle_auth_command(args):
         print('Logged out')
     elif args.command == 'whoami':
         print(json.dumps(store.authenticate(cli_token(store))))
+    elif args.command in {'session-delete', 'sessions-clear'}:
+        from .session_lifecycle import (clear_saved_sessions, delete_saved_session,
+                                        session_deletion_candidates, session_path)
+        user = store.authenticate(cli_token(store))
+        # Preserve the lexical path so lifecycle checks can detect a symlink
+        # redirect to another user's directory, even inside the same root.
+        directory = store.workspace / 'users' / user['user_id'] / 'sessions'
+        session_path(directory, '_scope_check')
+        if args.command == 'session-delete':
+            if not session_path(directory, args.session_id).is_file():
+                raise ValueError('Session not found for the current user.')
+            candidates = [args.session_id]
+        else:
+            candidates = session_deletion_candidates(directory)
+        if not candidates:
+            print('当前用户没有可删除的会话。')
+            return 0
+        print(f"用户 {user['username']}：将永久删除 {len(candidates)} 个会话，无法恢复。")
+        if args.command == 'session-delete':
+            print(f'Session ID: {args.session_id}')
+        print('只删除会话 JSON；保留 uploads、业务任务索引和 scratchpad，运行中的会话不删除。')
+        if not args.yes:
+            try:
+                confirmed = input('确认永久删除？[y/N] ').strip().lower() in {'y', 'yes'}
+            except EOFError:
+                confirmed = False
+            if not confirmed:
+                print('已取消，未删除任何会话。')
+                return 0
+        # The login can expire while the user is reading the confirmation.
+        store.authenticate(cli_token(store))
+        report = (delete_saved_session(directory, candidates[0]) if args.command == 'session-delete'
+                  else clear_saved_sessions(directory, candidates))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 1 if report.get('errors') else 0
     elif args.command == 'session-info':
         from .session_catalog import get_session_info
         from .user_workspace import contained

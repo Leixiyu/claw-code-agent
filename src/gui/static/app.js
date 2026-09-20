@@ -514,9 +514,13 @@ function renderSessions() {
       <div class="session-meta">${escapeHtml(s.modified_at_display || "")} 北京时间</div>
       <div class="session-meta">${s.turns} turns · ${s.tool_calls} tools</div>
       <input class="session-id" readonly aria-label="Session ID" value="${escapeHtml(s.session_id)}" />
-      <button type="button" class="session-copy btn-ghost">复制 ID</button>
+      <div class="session-actions">
+        <button type="button" class="session-copy btn-ghost">复制 ID</button>
+        <button type="button" class="session-delete btn-ghost">删除</button>
+      </div>
     `;
     item.querySelector(".session-open").addEventListener("click", () => openSession(s.session_id));
+    item.querySelector(".session-delete").addEventListener("click", () => deleteSession(s));
     item.querySelector(".session-id").addEventListener("click", (event) => event.target.select());
     item.querySelector(".session-copy").addEventListener("click", async () => {
       const input = item.querySelector(".session-id");
@@ -531,6 +535,62 @@ function renderSessions() {
       }
     });
     els.sessionList.appendChild(item);
+  }
+}
+
+async function deleteSession(session) {
+  if (State.isBusy) {
+    setStatus("busy", "请等待当前回复完成后再删除会话。");
+    return;
+  }
+  if (!window.confirm(`永久删除会话？此操作无法恢复。\n${session.preview || "无原始会话预览"}\nID: ${session.session_id}\n仅删除会话 JSON，不删除上传视频或业务任务。`)) return;
+  await performSessionDeletion(`/api/sessions/${encodeURIComponent(session.session_id)}?confirm=true`);
+}
+
+async function clearSessions() {
+  if (State.isBusy) {
+    setStatus("busy", "请等待当前回复完成后再清空会话。");
+    return;
+  }
+  try {
+    // Confirm a snapshot: do not delete sessions created after confirmation.
+    const preview = await apiPost("/api/sessions/clear-preview", {});
+    if (!preview.session_ids.length) {
+      setStatus("ready", "没有可删除的会话。");
+      return;
+    }
+    if (!window.confirm(`永久删除当前用户的 ${preview.session_ids.length} 个会话？此操作无法恢复。\n运行中的会话会被跳过。上传视频、业务任务索引和 scratchpad 不会删除。`)) return;
+    await performSessionDeletion("/api/sessions", { session_ids: preview.session_ids, confirm: true });
+  } catch (e) {
+    setStatus("error", `清空失败：${e.message}`);
+  }
+}
+
+async function performSessionDeletion(url, body) {
+  setBusy(true);
+  let finalStatus;
+  try {
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const report = await response.json();
+    if (!response.ok) throw new Error(report.detail || `HTTP ${response.status}`);
+    if (report.deleted.includes(State.activeSessionId)) newSession();
+    await loadSessions();
+    const busy = report.skipped_running?.length || 0;
+    const errors = report.errors?.length || 0;
+    const missing = report.not_found?.length || 0;
+    finalStatus = [errors ? "error" : "ready", `已永久删除 ${report.deleted.length} 个会话` +
+      (busy ? `；跳过 ${busy} 个运行中会话` : "") +
+      (missing ? `；${missing} 个会话已不存在` : "") +
+      (errors ? `；${errors} 个删除失败，请刷新后重试` : "")];
+  } catch (e) {
+    finalStatus = ["error", `删除失败：${e.message}`];
+  } finally {
+    setBusy(false);
+    if (finalStatus) setStatus(...finalStatus);
   }
 }
 
@@ -2452,6 +2512,7 @@ function bind() {
   });
   els.sendBtn.addEventListener("click", send);
   els.newSessionBtn.addEventListener("click", newSession);
+  $("#clear-sessions-btn").addEventListener("click", clearSessions);
   els.settingsForm.addEventListener("submit", saveSettings);
   els.slashBtn.addEventListener("click", () => openPalette("slash"));
   els.skillsBtn.addEventListener("click", () => openPalette("skills"));

@@ -73,20 +73,26 @@ class StoredAgentSession:
 
 
 def save_agent_session(session: StoredAgentSession, directory: Path | None = None) -> Path:
+    from .session_lifecycle import session_guard, session_path
+    from .user_workspace import atomic_json
     target_dir = directory or DEFAULT_AGENT_SESSION_DIR
-    target_dir.mkdir(parents=True, exist_ok=True)
-    path = target_dir / f'{session.session_id}.json'
-    path.write_text(json.dumps(asdict(session), indent=2), encoding='utf-8')
+    with session_guard(target_dir, session.session_id):
+        path = session_path(target_dir, session.session_id)
+        atomic_json(path, asdict(session))
     return path
 
 
 def read_agent_session(session_id: str, directory: Path | None = None) -> StoredAgentSession:
     """Deserialize a complete Agent session without restoring runtime state."""
     target_dir = directory or DEFAULT_AGENT_SESSION_DIR
+    from .session_lifecycle import SessionDeletedError
+    marker = target_dir / '.lifecycle' / f'{session_id}.lock'
     if not session_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in session_id):
         raise FileNotFoundError('invalid session ID')
     from .user_workspace import contained
     contained(target_dir, target_dir / f'{session_id}.json')
+    if marker.is_file() and marker.stat().st_size:
+        raise SessionDeletedError(f'Session {session_id} was permanently deleted. Start a new chat.')
     data = json.loads((target_dir / f'{session_id}.json').read_text(encoding='utf-8'))
     return StoredAgentSession(
         session_id=data['session_id'],

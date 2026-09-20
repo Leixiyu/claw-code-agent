@@ -636,14 +636,24 @@ def _run_agent_chat_loop(
             output_func('chat_ended=user_exit')
             return 0
 
-        if active_session_id:
-            stored_session = read_agent_session(
-                active_session_id,
-                directory=agent.runtime_config.session_directory,
-            )
-            result = agent.resume(prompt, stored_session)
-        else:
-            result = agent.run(prompt)
+        from .session_lifecycle import SessionBusyError
+        try:
+            if active_session_id:
+                stored_session = read_agent_session(
+                    active_session_id,
+                    directory=agent.runtime_config.session_directory,
+                )
+                result = agent.resume(prompt, stored_session)
+            else:
+                result = agent.run(prompt)
+        except FileNotFoundError as exc:
+            output_func(f'会话不存在或已删除：{exc}。已切换到新会话，请重新输入问题。')
+            active_session_id = None
+            agent.clear_runtime_state()
+            continue
+        except SessionBusyError as exc:
+            output_func(str(exc))
+            continue
         result_printer(result, show_transcript=show_transcript)
         active_session_id = result.session_id
 
@@ -1014,7 +1024,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     from .auth_cli import handle_auth_command, prepare_user_args
     try:
-        if args.command in {'users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info'}:
+        if args.command in {'users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info', 'session-delete', 'sessions-clear'}:
             return handle_auth_command(args)
         if args.command.startswith('agent-') or args.command in {'agent', 'daemon', 'token-budget', 'agents'}:
             prepare_user_args(args)
@@ -1564,8 +1574,13 @@ def main(argv: list[str] | None = None) -> int:
             show_transcript=args.show_transcript,
         )
     if args.command == 'agent-resume':
-        agent, stored_session = _build_resumed_agent(args)
-        result = agent.resume(args.prompt, stored_session)
+        from .session_lifecycle import SessionBusyError
+        try:
+            agent, stored_session = _build_resumed_agent(args)
+            result = agent.resume(args.prompt, stored_session)
+        except (FileNotFoundError, SessionBusyError) as exc:
+            print(f'Cannot resume session: {exc}', file=sys.stderr)
+            return 1
         _print_agent_result(result, show_transcript=args.show_transcript)
         return 0
     if args.command == 'agent-prompt':

@@ -291,6 +291,7 @@ claw-code-agent/
 │   ├── agent_plugin_cache.py     # Plugin discovery & prompt injection cache
 │   ├── session_store.py          # Session serialization & persistence
 │   ├── session_catalog.py        # Shared CLI/GUI session listing and stable query previews
+│   ├── session_lifecycle.py      # Permanent deletion, cross-process locks and anti-resurrection markers
 │   ├── transcript.py             # Transcript block export & mutation tracking
 │   ├── query_engine.py           # Query engine facade & runtime orchestration
 │   ├── mcp_runtime.py            # Local MCP discovery and stdio MCP transport
@@ -331,6 +332,8 @@ claw-code-agent/
     ├── test_task_indexes.py          # Cached status, legacy indexes, done-only result lookup
     ├── test_business_compact.py      # Protected instructions, business summaries and recovery
     ├── test_session_catalog.py       # User-scoped listings, previews and compaction persistence
+    ├── test_session_deletion.py      # Permanent deletion, running sessions, stale clients and user isolation
+    ├── test_session_deletion_ui.js   # Mocked GUI confirmation, cancellation and deletion feedback
     ├── test_background_user_scope.py # Background ownership, process checks and GUI boundaries
     ├── test_agent_context.py
     ├── test_agent_context_usage.py
@@ -533,6 +536,8 @@ python3 -m src.main agent \
 | `agent-chat [prompt]` | Start interactive multi-turn chat mode |
 | `sessions [--limit N]` | List the logged-in user's saved chats (default: 20), with IDs, Beijing update times and first-query previews |
 | `session-info <session_id>` | Show the logged-in user's saved session ID, message count and input/output tokens; does not resume chat |
+| `session-delete <session_id> [--yes]` | Permanently delete one current-user session; confirm by default; refuse running sessions |
+| `sessions-clear [--yes]` | Permanently delete a confirmed snapshot of current-user session JSON files; skip running sessions |
 | `agent-bg <prompt>` | Run the agent in a local background session |
 | `agent-ps` | List local background sessions |
 | `agent-logs <id>` | Show background session logs |

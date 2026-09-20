@@ -121,6 +121,12 @@ def create_authenticated_app(template, auth_store=None):
                     return await JSONResponse({'detail': 'unavailable in prototype'}, 403)(scope, receive, send)
                 if path == '/api/state' and scope['method'] != 'GET':
                     return await JSONResponse({'detail': 'settings are administrator-managed'}, 403)(scope, receive, send)
+                if scope['method'] == 'DELETE' or path == '/api/sessions/clear-preview':
+                    from ..session_lifecycle import session_path
+                    try:
+                        session_path(root / 'users' / scope['auth_user']['user_id'] / 'sessions', '_scope_check')
+                    except (OSError, ValueError):
+                        return await JSONResponse({'detail': 'unsafe user session directory'}, 403)(scope, receive, send)
                 target = user_app(scope['auth_user'])
             else:
                 target = public_files

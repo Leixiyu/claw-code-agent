@@ -1993,7 +1993,7 @@ to 20 entries; the GUI keeps its existing full list. The GUI shows the same prev
 and a copy-ID button (manual selection fallback for non-secure HTTP). `/compact` and resume
 must retain the original preview. Old compacted chats without an identifiable original query
 show “无原始会话预览”; malformed/unsafe files are skipped with a count. Listing must not call
-the LLM/business APIs or modify session files. No deletion is implemented.
+the LLM/business APIs or modify session files. Deletion is a separate, confirmed operation.
 
 `session-info` requires login and reads only the current user's `sessions/`. It prints
 three lines: session ID, message count, and `in=<input_tokens> out=<output_tokens>` from
@@ -2004,10 +2004,27 @@ Run the mocked regression suite:
 
 ```bash
 python3 -m unittest tests.test_session_catalog -v
+python3 -m unittest tests.test_session_deletion -v
+node --test tests/test_session_deletion_ui.js
 ```
 
 It covers limits/sorting, login expiry, user isolation, CLI/GUI agreement, corrupt files,
 symlink rejection and preview persistence through real runtime resume/compact paths with a fake model.
+
+For deletion QA, use disposable test sessions, not valuable chat history:
+
+1. `session-delete <id>`: cancel first and verify no change; confirm and verify the JSON and preview disappear.
+2. `sessions-clear`: confirm the snapshot; running entries must be reported/skipped. `--yes` bypasses only the prompt.
+3. GUI: open an idle session, delete it with confirmation, and verify New chat and the refreshed list.
+   Cancel clear-all once, then confirm against disposable chats. Another user's sessions must remain untouched.
+4. Resume a saved session with a blocking fake model in another process/thread. Delete must fail with a busy error
+   (GUI HTTP 409); bulk clear must skip it. After the turn finishes, deletion should work.
+5. Keep an old session object/window, delete elsewhere, then resume/save: it must report deletion, never recreate JSON
+   or call the model. An old CLI switches to a new session but does not automatically resend the rejected prompt.
+6. Check uploads, task indexes, scratchpad, auth and background records remain unchanged. Only ID-based markers remain
+   in `sessions/.lifecycle/`, with no conversation content. `/clear` must still leave stored chats alone.
+
+Restart all older CLI/GUI/worker processes before testing cross-process protection; old versions do not acquire these locks.
 
 ### General maintenance
 

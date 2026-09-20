@@ -382,6 +382,11 @@ class LocalCodingAgent:
         return result
 
     def resume(self, prompt: str, stored_session: StoredAgentSession) -> AgentRunResult:
+        from .session_lifecycle import session_guard
+        with session_guard(self.runtime_config.session_directory, stored_session.session_id, active=True):
+            return self._resume_locked(prompt, stored_session)
+
+    def _resume_locked(self, prompt: str, stored_session: StoredAgentSession) -> AgentRunResult:
         if self.authenticated_user_id:
             from .user_agent import validate_user_session
             validate_user_session(stored_session, self.runtime_config.cwd)
@@ -438,6 +443,32 @@ class LocalCodingAgent:
         return result
 
     def _run_prompt(
+        self,
+        prompt: str,
+        *,
+        base_session: AgentSessionState | None,
+        session_id: str,
+        scratchpad_directory: Path | None,
+        existing_file_history: tuple[dict[str, object], ...],
+    ) -> AgentRunResult:
+        from .session_lifecycle import session_guard
+        # /compact may persist the already-open conversation, not the new ID
+        # allocated by run(). /clear is still a runtime reset, never deletion.
+        if prompt.strip() == '/clear':
+            return self._run_prompt_locked(
+                prompt, base_session=base_session, session_id=session_id,
+                scratchpad_directory=scratchpad_directory,
+                existing_file_history=existing_file_history,
+            )
+        guarded_id = self.active_session_id if prompt.lstrip().startswith('/') and self.active_session_id else session_id
+        with session_guard(self.runtime_config.session_directory, guarded_id, active=True):
+            return self._run_prompt_locked(
+                prompt, base_session=base_session, session_id=session_id,
+                scratchpad_directory=scratchpad_directory,
+                existing_file_history=existing_file_history,
+            )
+
+    def _run_prompt_locked(
         self,
         prompt: str,
         *,

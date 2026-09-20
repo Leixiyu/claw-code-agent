@@ -254,6 +254,7 @@ AGENT_WORKSPACE/
     └── <user_id>/
         ├── uploads/                  # 上传的 raw videos
         ├── sessions/                 # CLI/GUI 共用聊天记录
+        │   └── .lifecycle/           # 会话锁/删除标记，不含聊天内容，不要手工清除
         ├── video_processing_task_id.json
         ├── model_training_task_id.json
         ├── video_analysis_task_id.json
@@ -320,12 +321,39 @@ claw-code-agent agent-chat --resume-session-id <实际session_id> --show-transcr
 时提取预览；已压缩且缺失原始信息时显示“无原始会话预览”。损坏文件会跳过并报告数量。
 GUI 的 Sessions 列表使用相同逻辑，显示更新时间，并支持查看/复制完整 ID；
 普通 HTTP 下剪贴板不可用时，可选中 ID 后手动复制。列表不调用 LLM、不刷新业务状态，
-也不删除或改写历史会话；本次不提供会话删除功能。
+也不删除或改写历史会话。删除功能使用下面的独立入口。
+
+### 永久删除会话
+
+```bash
+claw-code-agent session-delete <实际session_id>
+claw-code-agent sessions-clear
+# 脚本中跳过交互确认（仍会检查登录及运行状态）：
+claw-code-agent session-delete <实际session_id> --yes
+claw-code-agent sessions-clear --yes
+```
+
+GUI 的 Sessions 列表中，每个会话有“删除”按钮，顶部有“清空会话记录”。两者都弹出
+永久删除确认，没有回收站，无法通过 Harness 恢复。删除当前打开的空闲会话后回到 New chat。
+CLI 默认需输入 y/yes 确认，直接回车或非交互 EOF 会取消。
+
+只删除当前用户 `sessions/<session_id>.json`，不删除 uploads、三个业务任务索引、
+scratchpad、后台记录、认证数据，也不取消 Business 后端任务。会话的 first-query 预览随 JSON 删除。
+清空按确认时的文件列表执行，包含损坏的普通 JSON 文件；不跟随符号链接，不删除后续新建的会话。
+单个删除遇到运行中的会话会报错；清空会跳过并在 `skipped_running` 中报告。
+`errors` 是失败项，`not_found` 表示操作时已不存在；CLI 有失败项时退出码为 1。
+
+CLI/GUI 的运行、保存和删除共用进程间文件锁（Linux/macOS）。`sessions/.lifecycle/` 中只保留
+会话 ID 对应的锁/删除标记，不保存被删除的聊天内容。不要手动清理这些标记：它们阻止仍打开的
+旧客户端把已删除会话重新写回。旧 CLI 下一次发送时会提示会话不存在/已删除，切换新会话并要求重新
+输入问题；旧 GUI 会提示恢复失败，需要点击 New chat。`/clear` 仍只重置运行状态，不删除磁盘历史。
+首次启用本功能时应重启所有旧版本 CLI/GUI/后台进程，旧代码不会遵守新锁。文件锁仅覆盖使用同一
+会话目录且支持 flock 的文件系统，不代表完整的多主机分布式协调。
 
 `session-info` 只读取当前用户的 Agent 会话，输出 ID、消息数量和输入/输出 token 数，
 不进入聊天、不修改会话；它不再读取旧的 `.port_sessions/<id>.json` 简化格式。
 原 CLI 名称 `load-session` 已移除，现有脚本需改用 `session-info`。
-sessions、session-info、agent、agent-chat、agent-resume 和后台 Agent 入口都需要有效登录。
+sessions、session-info、session-delete、sessions-clear、agent、agent-chat、agent-resume 和后台 Agent 入口都需要有效登录。
 同一认证目录的 CLI 使用同一份 cli-token.json，后一次 login 会替换终端后续使用的
 默认凭证；同一 OS 账号上的多个测试终端不要假设彼此身份独立。
 普通多用户测试优先使用不同浏览器会话；脚本需要各自管理 Token。
