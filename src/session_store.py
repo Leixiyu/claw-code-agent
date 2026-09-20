@@ -37,7 +37,8 @@ def save_session(session: StoredSession, directory: Path | None = None) -> Path:
     return path
 
 
-def load_session(session_id: str, directory: Path | None = None) -> StoredSession:
+def read_legacy_session(session_id: str, directory: Path | None = None) -> StoredSession:
+    """Read the old mirrored-runtime format; does not resume a conversation."""
     target_dir = directory or DEFAULT_SESSION_DIR
     data = json.loads((target_dir / f'{session_id}.json').read_text())
     return StoredSession(
@@ -68,6 +69,7 @@ class StoredAgentSession:
     budget_state: JSONDict
     plugin_state: JSONDict
     scratchpad_directory: str | None = None
+    preview: str | None = None
 
 
 def save_agent_session(session: StoredAgentSession, directory: Path | None = None) -> Path:
@@ -78,7 +80,8 @@ def save_agent_session(session: StoredAgentSession, directory: Path | None = Non
     return path
 
 
-def load_agent_session(session_id: str, directory: Path | None = None) -> StoredAgentSession:
+def read_agent_session(session_id: str, directory: Path | None = None) -> StoredAgentSession:
+    """Deserialize a complete Agent session without restoring runtime state."""
     target_dir = directory or DEFAULT_AGENT_SESSION_DIR
     if not session_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in session_id):
         raise FileNotFoundError('invalid session ID')
@@ -87,6 +90,7 @@ def load_agent_session(session_id: str, directory: Path | None = None) -> Stored
     data = json.loads((target_dir / f'{session_id}.json').read_text(encoding='utf-8'))
     return StoredAgentSession(
         session_id=data['session_id'],
+        preview=data.get('preview') if isinstance(data.get('preview'), str) else None,
         model_config=dict(data['model_config']),
         runtime_config=dict(data['runtime_config']),
         system_prompt_parts=tuple(data['system_prompt_parts']),

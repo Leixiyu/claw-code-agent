@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import Event, Lock
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -34,10 +34,11 @@ from ..agent_types import (
 )
 from ..bundled_skills import get_bundled_skills
 from ..paste_refs import PastedContent, expand_pasted_text_refs
+from ..session_catalog import list_saved_sessions
 from ..session_store import (
     DEFAULT_AGENT_SESSION_DIR,
     StoredAgentSession,
-    load_agent_session,
+    read_agent_session,
 )
 from .account_routes import create_account_router
 from .ask_user_routes import create_ask_user_router
@@ -581,43 +582,17 @@ def create_user_app(state: AgentState) -> FastAPI:
 
     # ------------- sessions --------------------------------------------------
     @app.get('/api/sessions')
-    async def list_sessions() -> list[dict[str, Any]]:
-        directory = state.session_directory
-        if not directory.exists():
-            return []
-        results: list[dict[str, Any]] = []
-        for path in sorted(
-            directory.glob('*.json'),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        ):
-            try:
-                data = json.loads(path.read_text(encoding='utf-8'))
-            except (OSError, json.JSONDecodeError):
-                continue
-            messages = data.get('messages') or []
-            preview = ''
-            for msg in messages:
-                if isinstance(msg, dict) and msg.get('role') == 'user':
-                    content = msg.get('content', '')
-                    if isinstance(content, str):
-                        preview = content[:120]
-                        break
-            results.append(
-                {
-                    'session_id': data.get('session_id', path.stem),
-                    'turns': data.get('turns', 0),
-                    'tool_calls': data.get('tool_calls', 0),
-                    'preview': preview,
-                    'modified_at': path.stat().st_mtime,
-                }
-            )
-        return results
+    async def list_sessions(response: Response, limit: int | None = Query(default=None, ge=1)) -> list[dict[str, Any]]:
+        listing = list_saved_sessions(state.session_directory, limit=limit)
+        # Keep the existing array response for clients; diagnostics use headers.
+        response.headers['X-Session-Total'] = str(listing['total'])
+        response.headers['X-Session-Skipped'] = str(listing['skipped'])
+        return listing['sessions']
 
     @app.get('/api/sessions/{session_id}')
     async def get_session(session_id: str) -> dict[str, Any]:
         try:
-            stored = load_agent_session(session_id, directory=state.session_directory)
+            stored = read_agent_session(session_id, directory=state.session_directory)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail='Session not found')
         return _serialize_stored_session(stored)
@@ -683,7 +658,7 @@ def create_user_app(state: AgentState) -> FastAPI:
             try:
                 if request.resume_session_id is not None:
                     try:
-                        stored = load_agent_session(
+                        stored = read_agent_session(
                             request.resume_session_id,
                             directory=state.session_directory,
                         )

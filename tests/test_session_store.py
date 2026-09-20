@@ -23,8 +23,8 @@ from src.session_store import (
     _optional_int,
     deserialize_model_config,
     deserialize_runtime_config,
-    load_agent_session,
-    load_session,
+    read_agent_session,
+    read_legacy_session,
     save_agent_session,
     save_session,
     serialize_model_config,
@@ -34,7 +34,7 @@ from src.session_store import (
 
 
 class TestStoredSessionRoundTrip(unittest.TestCase):
-    """save_session then load_session preserves all fields."""
+    """save_session then read_legacy_session preserves all fields."""
 
     def test_round_trip(self) -> None:
         session = StoredSession(
@@ -46,7 +46,7 @@ class TestStoredSessionRoundTrip(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
             save_session(session, directory=directory)
-            loaded = load_session('abc-123', directory=directory)
+            loaded = read_legacy_session('abc-123', directory=directory)
 
         self.assertEqual(loaded.session_id, session.session_id)
         self.assertEqual(loaded.messages, session.messages)
@@ -63,14 +63,14 @@ class TestStoredSessionRoundTrip(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
             save_session(session, directory=directory)
-            loaded = load_session('empty', directory=directory)
+            loaded = read_legacy_session('empty', directory=directory)
 
         self.assertEqual(loaded.messages, ())
         self.assertEqual(loaded.input_tokens, 0)
 
 
 class TestStoredAgentSessionRoundTrip(unittest.TestCase):
-    """save_agent_session then load_agent_session preserves all fields."""
+    """save_agent_session then read_agent_session preserves all fields."""
 
     def _make_session(self, **overrides: object) -> StoredAgentSession:
         defaults: dict = {
@@ -98,7 +98,7 @@ class TestStoredAgentSessionRoundTrip(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
             save_agent_session(session, directory=directory)
-            loaded = load_agent_session('agent-001', directory=directory)
+            loaded = read_agent_session('agent-001', directory=directory)
 
         self.assertEqual(loaded.session_id, session.session_id)
         self.assertEqual(loaded.model_config, session.model_config)
@@ -121,7 +121,7 @@ class TestStoredAgentSessionRoundTrip(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
             save_agent_session(session, directory=directory)
-            loaded = load_agent_session('agent-001', directory=directory)
+            loaded = read_agent_session('agent-001', directory=directory)
 
         self.assertIsNone(loaded.scratchpad_directory)
 
@@ -153,7 +153,7 @@ class TestStoredAgentSessionRoundTrip(unittest.TestCase):
                 'plugin_state': {},
             }
             path.write_text(json.dumps(data))
-            loaded = load_agent_session('mixed', directory=directory)
+            loaded = read_agent_session('mixed', directory=directory)
 
         self.assertEqual(len(loaded.messages), 2)
         self.assertEqual(loaded.messages[0]['role'], 'user')
@@ -176,7 +176,7 @@ class TestStoredAgentSessionRoundTrip(unittest.TestCase):
                 'tool_calls': 2,
             }
             path.write_text(json.dumps(data))
-            loaded = load_agent_session('minimal', directory=directory)
+            loaded = read_agent_session('minimal', directory=directory)
 
         self.assertEqual(loaded.usage, {})
         self.assertAlmostEqual(loaded.total_cost_usd, 0.0)
@@ -203,7 +203,7 @@ class TestStoredAgentSessionRoundTrip(unittest.TestCase):
                 'plugin_state': 123,
             }
             path.write_text(json.dumps(data))
-            loaded = load_agent_session('bad-budget', directory=directory)
+            loaded = read_agent_session('bad-budget', directory=directory)
 
         self.assertEqual(loaded.budget_state, {})
         self.assertEqual(loaded.plugin_state, {})

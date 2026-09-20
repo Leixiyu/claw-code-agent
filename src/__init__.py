@@ -43,7 +43,7 @@ from .query_engine import QueryEnginePort, TurnResult
 from .remote_trigger_runtime import RemoteTriggerDefinition, RemoteTriggerRunRecord, RemoteTriggerRuntime
 from .runtime import PortRuntime, RuntimeSession
 from .search_runtime import SearchProviderProfile, SearchResult, SearchRuntime, SearchStatusReport
-from .session_store import StoredSession, load_session, save_session
+from .session_store import StoredSession, read_legacy_session, save_session
 from .system_init import build_system_init_message
 from .task import PortingTask
 from .task_runtime import TaskRuntime
@@ -139,7 +139,7 @@ __all__ = [
     'get_system_context',
     'get_user_context',
     'load_agent_registry',
-    'load_session',
+    'read_legacy_session',
     'normalize_mutable_source',
     'render_agent_detail',
     'render_agent_mutation',

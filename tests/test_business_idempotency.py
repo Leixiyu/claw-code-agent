@@ -167,7 +167,7 @@ class BusinessIdempotencyTests(unittest.TestCase):
     def test_agent_resume_reuses_business_operation_with_no_key_in_model_arguments(self):
         from src.agent_runtime import LocalCodingAgent
         from src.agent_types import ModelConfig
-        from src.session_store import load_agent_session
+        from src.session_store import read_agent_session
         from tests.test_agent_runtime import FakeHTTPResponse
 
         def reply(message, finish):
@@ -191,7 +191,7 @@ class BusinessIdempotencyTests(unittest.TestCase):
             first_agent = LocalCodingAgent(model_config=model, runtime_config=config)
             first = first_agent.run('Label demo.mp4')
             self.assertEqual(first.final_output, 'Submitted.')
-            stored = load_agent_session(first.session_id, directory=config.session_directory)
+            stored = read_agent_session(first.session_id, directory=config.session_directory)
             resumed_agent = LocalCodingAgent(model_config=model, runtime_config=config)
             second = resumed_agent.resume('Continue the same labeling task', stored)
             self.assertEqual(second.final_output, 'Reused.')

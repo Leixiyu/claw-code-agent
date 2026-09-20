@@ -12,30 +12,39 @@ runs observable and recoverable.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
 
-from ..background_runtime import (
-    DEFAULT_BACKGROUND_DIR,
-    BackgroundSessionRuntime,
-)
+from ..background_runtime import BackgroundSessionRuntime
+
+
+@contextmanager
+def _background_errors():
+    try:
+        yield
+    except FileNotFoundError as exc:
+        raise HTTPException(404, 'background session not found') from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(409, 'background task operation could not be completed') from exc
 
 
 def create_background_router(get_cwd: Callable[[], Path]) -> APIRouter:
     router = APIRouter(prefix='/api/background', tags=['background'])
 
     def _runtime() -> BackgroundSessionRuntime:
-        return BackgroundSessionRuntime(
-            root=get_cwd().resolve() / DEFAULT_BACKGROUND_DIR
-        )
+        return BackgroundSessionRuntime.for_workspace(get_cwd())
 
     @router.get('')
     def list_background() -> dict[str, Any]:
-        runtime = _runtime()
-        records = runtime.list_records()
+        with _background_errors():
+            runtime = _runtime()
+            records = runtime.list_records()
         return {
             'root': str(runtime.root),
             'sessions': [asdict(record) for record in records],
@@ -49,32 +58,24 @@ def create_background_router(get_cwd: Callable[[], Path]) -> APIRouter:
 
     @router.get('/{background_id}')
     def get_background(background_id: str) -> dict[str, Any]:
-        try:
+        with _background_errors():
             record = _runtime().load_record(background_id)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail='background session not found')
         return asdict(record)
 
     @router.get('/{background_id}/logs')
     def get_logs(background_id: str, tail: int | None = None) -> dict[str, Any]:
-        runtime = _runtime()
-        try:
-            runtime.load_record(background_id)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail='background session not found')
+        with _background_errors():
+            content = _runtime().read_logs(background_id, tail=tail)
         return {
             'background_id': background_id,
             'tail': tail,
-            'content': runtime.read_logs(background_id, tail=tail),
+            'content': content,
         }
 
     @router.post('/{background_id}/kill')
     def kill_background(background_id: str) -> dict[str, Any]:
-        runtime = _runtime()
-        try:
-            record = runtime.kill(background_id)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail='background session not found')
+        with _background_errors():
+            record = _runtime().kill(background_id)
         return asdict(record)
 
     return router

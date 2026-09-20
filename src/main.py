@@ -57,8 +57,7 @@ from .session_store import (
     StoredAgentSession,
     deserialize_model_config,
     deserialize_runtime_config,
-    load_agent_session,
-    load_session,
+    read_agent_session,
 )
 from .setup import run_setup
 from .tool_pool import assemble_tool_pool
@@ -328,8 +327,12 @@ def _add_agent_resume_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--scratchpad-root')
 
 
+def _background_runtime(args: argparse.Namespace) -> BackgroundSessionRuntime:
+    return BackgroundSessionRuntime.for_workspace(args._user_workspace)
+
+
 def _launch_background_agent(args: argparse.Namespace) -> int:
-    background_runtime = BackgroundSessionRuntime(Path(args.background_root)) if hasattr(args, '_user_workspace') else BackgroundSessionRuntime()
+    background_runtime = _background_runtime(args)
     background_id = background_runtime.create_id()
     forwarded_args: list[str] = []
     forwarded = argparse.Namespace(**vars(args))
@@ -362,7 +365,8 @@ def _launch_background_agent(args: argparse.Namespace) -> int:
 
 
 def _run_background_worker(args: argparse.Namespace) -> int:
-    background_runtime = BackgroundSessionRuntime(Path(args.background_root))
+    background_runtime = _background_runtime(args)
+    background_runtime.require_worker(args.background_id)
     exit_code = 1
     stop_reason = 'worker_failed'
     session_id = None
@@ -386,8 +390,35 @@ def _run_background_worker(args: argparse.Namespace) -> int:
         )
 
 
+def _handle_background_command(args: argparse.Namespace) -> int:
+    operation = args.daemon_command if args.command == 'daemon' else {
+        'agent-bg': 'start', 'agent-bg-worker': 'worker', 'agent-ps': 'ps',
+        'agent-logs': 'logs', 'agent-attach': 'attach', 'agent-kill': 'kill',
+    }[args.command]
+    if operation == 'start':
+        return _launch_background_agent(args)
+    if operation == 'worker':
+        return _run_background_worker(args)
+    runtime = _background_runtime(args)
+    if operation == 'ps':
+        print(runtime.render_ps())
+    elif operation == 'logs':
+        print(runtime.render_logs(args.background_id, tail=args.tail))
+    elif operation == 'attach':
+        print(runtime.render_attach(args.background_id, tail=args.tail))
+    elif operation == 'kill':
+        record = runtime.kill(args.background_id)
+        print('# Background Session')
+        print(f'background_id={record.background_id}')
+        print(f'status={record.status}')
+        print(f'pid={record.pid}')
+        if record.exit_code is not None:
+            print(f'exit_code={record.exit_code}')
+    return 0
+
+
 def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, StoredAgentSession]:
-    stored_session = load_agent_session(args.session_id, directory=(
+    stored_session = read_agent_session(args.session_id, directory=(
         args._user_workspace / 'sessions' if hasattr(args, '_user_workspace') else None))
     model_config = deserialize_model_config(stored_session.model_config)
     runtime_config = deserialize_runtime_config(stored_session.runtime_config)
@@ -606,7 +637,7 @@ def _run_agent_chat_loop(
             return 0
 
         if active_session_id:
-            stored_session = load_agent_session(
+            stored_session = read_agent_session(
                 active_session_id,
                 directory=agent.runtime_config.session_directory,
             )
@@ -663,9 +694,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     flush_parser = subparsers.add_parser('flush-transcript', help='persist and flush a temporary session transcript')
     flush_parser.add_argument('prompt')
-
-    load_session_parser = subparsers.add_parser('load-session', help='load a previously persisted session')
-    load_session_parser.add_argument('session_id')
 
     remote_parser = subparsers.add_parser('remote-mode', help='simulate remote-control runtime branching')
     remote_parser.add_argument('target')
@@ -986,10 +1014,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     from .auth_cli import handle_auth_command, prepare_user_args
     try:
-        if args.command in {'users-create', 'login', 'logout', 'whoami', 'migrate-user-data'}:
+        if args.command in {'users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info'}:
             return handle_auth_command(args)
         if args.command.startswith('agent-') or args.command in {'agent', 'daemon', 'token-budget', 'agents'}:
             prepare_user_args(args)
+        if args.command in {'agent-bg', 'agent-bg-worker', 'agent-ps', 'agent-logs', 'agent-attach', 'agent-kill', 'daemon'}:
+            try:
+                return _handle_background_command(args)
+            except FileNotFoundError:
+                print('Background task or file not found for the current user.', file=sys.stderr)
+                return 1
     except (ValueError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -1075,10 +1109,6 @@ def main(argv: list[str] | None = None) -> int:
         path = engine.persist_session()
         print(path)
         print(f'flushed={engine.transcript_store.flushed}')
-        return 0
-    if args.command == 'load-session':
-        session = load_session(args.session_id)
-        print(f'{session.session_id}\n{len(session.messages)} messages\nin={session.input_tokens} out={session.output_tokens}')
         return 0
     if args.command == 'remote-mode':
         print(run_remote_mode(args.target, cwd=Path(args.cwd).resolve()).as_text())
@@ -1525,71 +1555,6 @@ def main(argv: list[str] | None = None) -> int:
         result = agent.run(args.prompt)
         _print_agent_result(result, show_transcript=args.show_transcript)
         return 0
-    if args.command == 'agent-bg':
-        return _launch_background_agent(args)
-    if args.command == 'agent-bg-worker':
-        return _run_background_worker(args)
-    if args.command == 'agent-ps':
-        print(BackgroundSessionRuntime(Path(args.background_root)).render_ps())
-        return 0
-    if args.command == 'agent-logs':
-        print(
-            BackgroundSessionRuntime(Path(args.background_root)).render_logs(
-                args.background_id,
-                tail=args.tail,
-            )
-        )
-        return 0
-    if args.command == 'agent-attach':
-        print(
-            BackgroundSessionRuntime(Path(args.background_root)).render_attach(
-                args.background_id,
-                tail=args.tail,
-            )
-        )
-        return 0
-    if args.command == 'agent-kill':
-        record = BackgroundSessionRuntime(Path(args.background_root)).kill(args.background_id)
-        print('# Background Session')
-        print(f'background_id={record.background_id}')
-        print(f'status={record.status}')
-        print(f'pid={record.pid}')
-        if record.exit_code is not None:
-            print(f'exit_code={record.exit_code}')
-        return 0
-    if args.command == 'daemon':
-        if args.daemon_command == 'start':
-            return _launch_background_agent(args)
-        if args.daemon_command == 'worker':
-            return _run_background_worker(args)
-        if args.daemon_command == 'ps':
-            print(BackgroundSessionRuntime(Path(args.background_root)).render_ps())
-            return 0
-        if args.daemon_command == 'logs':
-            print(
-                BackgroundSessionRuntime(Path(args.background_root)).render_logs(
-                    args.background_id,
-                    tail=args.tail,
-                )
-            )
-            return 0
-        if args.daemon_command == 'attach':
-            print(
-                BackgroundSessionRuntime(Path(args.background_root)).render_attach(
-                    args.background_id,
-                    tail=args.tail,
-                )
-            )
-            return 0
-        if args.daemon_command == 'kill':
-            record = BackgroundSessionRuntime().kill(args.background_id)
-            print('# Background Session')
-            print(f'background_id={record.background_id}')
-            print(f'status={record.status}')
-            print(f'pid={record.pid}')
-            if record.exit_code is not None:
-                print(f'exit_code={record.exit_code}')
-            return 0
     if args.command == 'agent-chat':
         agent = _build_agent(args)
         return _run_agent_chat_loop(

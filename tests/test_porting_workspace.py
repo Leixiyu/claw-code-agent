@@ -151,19 +151,17 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('Command entries:', command_result.stdout)
         self.assertIn('Tool entries:', tool_result.stdout)
 
-    def test_load_session_cli_runs(self) -> None:
+    def test_load_legacy_mirrored_session(self) -> None:
         from src.runtime import PortRuntime
+        from src.session_store import read_legacy_session
 
         session = PortRuntime().bootstrap_session('review MCP tool', limit=5)
         session_id = Path(session.persisted_session_path).stem
-        result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'load-session', session_id],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertIn(session_id, result.stdout)
-        self.assertIn('messages', result.stdout)
+        # The public CLI now reads authenticated Agent sessions. The legacy
+        # mirrored-runtime serialization API remains available internally.
+        loaded = read_legacy_session(session_id)
+        self.assertEqual(loaded.session_id, session_id)
+        self.assertTrue(loaded.messages)
 
     def test_tool_permission_filtering_cli_runs(self) -> None:
         result = subprocess.run(

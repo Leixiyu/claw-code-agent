@@ -22,7 +22,7 @@ from src.compact import CompactionResult
 from src.openai_compat import OpenAICompatClient
 from src.session_store import (
     StoredAgentSession,
-    load_agent_session,
+    read_agent_session,
     serialize_model_config,
     serialize_runtime_config,
 )
@@ -404,7 +404,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 )
                 first_result = agent.run('Start task')
                 self.assertIsNotNone(first_result.session_id)
-                stored = load_agent_session(first_result.session_id or '', directory=session_dir)
+                stored = read_agent_session(first_result.session_id or '', directory=session_dir)
 
                 resumed_agent = LocalCodingAgent(
                     model_config=ModelConfig(
@@ -1057,7 +1057,7 @@ class AgentRuntimeTests(unittest.TestCase):
                     ),
                 )
                 result = agent.run('Create out.txt')
-                stored = load_agent_session(result.session_id or '', directory=session_dir)
+                stored = read_agent_session(result.session_id or '', directory=session_dir)
         self.assertEqual(len(result.file_history), 1)
         self.assertEqual(result.file_history[0]['path'], 'out.txt')
         self.assertEqual(result.file_history[0]['history_kind'], 'file_change')
@@ -1397,7 +1397,7 @@ class AgentRuntimeTests(unittest.TestCase):
                     ),
                 )
                 first_result = agent.run('Create replay.txt')
-                stored = load_agent_session(first_result.session_id or '', directory=session_dir)
+                stored = read_agent_session(first_result.session_id or '', directory=session_dir)
 
                 resumed_agent = LocalCodingAgent(
                     model_config=ModelConfig(
@@ -1499,7 +1499,7 @@ class AgentRuntimeTests(unittest.TestCase):
                     ),
                 )
                 first_result = agent.run('Edit draft.txt')
-                stored = load_agent_session(first_result.session_id or '', directory=session_dir)
+                stored = read_agent_session(first_result.session_id or '', directory=session_dir)
                 resumed_agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1601,7 +1601,7 @@ class AgentRuntimeTests(unittest.TestCase):
                     ),
                 )
                 first_result = agent.run('Read the large file and summarize it')
-                stored = load_agent_session(first_result.session_id or '', directory=session_dir)
+                stored = read_agent_session(first_result.session_id or '', directory=session_dir)
                 resumed_agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2226,7 +2226,7 @@ class AgentRuntimeTests(unittest.TestCase):
                     ),
                 )
                 first = agent.run('First prompt')
-                stored = load_agent_session(first.session_id or '', directory=session_dir)
+                stored = read_agent_session(first.session_id or '', directory=session_dir)
                 resumed = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2329,7 +2329,7 @@ class AgentRuntimeTests(unittest.TestCase):
                     ),
                 )
                 first = agent.run('Use the plugin virtual tool')
-                stored = load_agent_session(first.session_id or '', directory=session_dir)
+                stored = read_agent_session(first.session_id or '', directory=session_dir)
                 resumed = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2413,7 +2413,7 @@ class AgentRuntimeTests(unittest.TestCase):
                     ),
                 )
                 first = agent.run('Store the plugin lifecycle session')
-                stored = load_agent_session(first.session_id or '', directory=session_dir)
+                stored = read_agent_session(first.session_id or '', directory=session_dir)
                 resumed = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',

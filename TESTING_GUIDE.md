@@ -266,12 +266,15 @@ python3 -m src.main exec-command review "inspect security review"
 python3 -m src.main exec-tool MCPTool "fetch resource list"
 ```
 
-### 3.6 Flush and load mirrored sessions
+### 3.6 Flush mirrored sessions
 
 ```bash
 python3 -m src.main flush-transcript "temporary mirrored transcript"
-python3 -m src.main load-session <session-id>
 ```
+
+This legacy helper writes the simplified mirrored-runtime format. `session-info` now
+reads authenticated Agent sessions instead; it is not paired with `flush-transcript`.
+The internal `src.session_store.read_legacy_session()` API still supports legacy records.
 
 ## 4. Prepare Local Test Workspaces
 
@@ -1043,10 +1046,15 @@ Look for `file_history_replay` messages in the transcript.
 
 ## 10. Background Sessions And Daemon Mode
 
+Run from the code directory with `.env` pointing to the workspace container and a valid
+`claw-code-agent login <username>`. All commands below operate only on that user's
+`users/<user_id>/.port_sessions/background/`. A `--cwd` override denotes the container,
+not an individual user directory; use the same container for login and all later commands.
+
 ### 10.1 Launch a background session
 
 ```bash
-python3 -m src.main agent-bg "/help" --cwd ./test_cases
+python3 -m src.main agent-bg "/help"
 ```
 
 This prints:
@@ -1086,13 +1094,31 @@ python3 -m src.main agent-kill <background-id>
 ### 10.6 Daemon wrappers
 
 ```bash
-python3 -m src.main daemon start "/help" --cwd ./test_cases
+python3 -m src.main daemon start "/help"
 python3 -m src.main daemon ps
 python3 -m src.main daemon ps --tail 20
 python3 -m src.main daemon logs <background-id>
 python3 -m src.main daemon attach <background-id>
 python3 -m src.main daemon kill <background-id>
 ```
+
+Both command families share authentication, path checks and process-identity checks.
+IDs containing paths, copied cross-user records, symlinks and hardlinked records/logs are rejected.
+The private worker command cannot be used to overwrite another task or run without its launch record.
+Old running records without process birth identity cannot be killed automatically. A kill stops the
+Harness process only, not Business API tasks already submitted. Invalid/missing records yield a concise
+CLI error; malformed entries do not break the whole list.
+
+GUI regression: public authenticated `/api/background/*` routes remain blocked (401 before login,
+403 after login); login, chat and session APIs still work. Internal developer background routes reuse
+the same validation and return 400/404/409 for invalid, missing or failed operations, rather than 500.
+This slice does not enable a new end-user background panel.
+
+```bash
+python3 -m unittest tests.test_background_user_scope tests.test_background_runtime tests.test_gui_background_api -v
+```
+
+Tests use temporary users and dedicated short-lived child processes, never production processes or models.
 
 ## 11. Structured Output, Budgets, And Context Reduction
 
@@ -1949,6 +1975,41 @@ python3 -m src.main turn-loop "inspect the runtime and tools" --limit 5 --max-tu
 ```
 
 ## 21. Maintenance Rules
+
+### Session listing smoke test
+
+From the code directory with `.env` configured, log in and list saved chats:
+
+```bash
+claw-code-agent login ray
+claw-code-agent sessions
+claw-code-agent sessions --limit 50
+claw-code-agent session-info <session_id>
+claw-code-agent agent-chat --resume-session-id <session_id>
+```
+
+Confirm IDs, first-query previews and Beijing update times, newest first. The CLI defaults
+to 20 entries; the GUI keeps its existing full list. The GUI shows the same previews/times
+and a copy-ID button (manual selection fallback for non-secure HTTP). `/compact` and resume
+must retain the original preview. Old compacted chats without an identifiable original query
+show “无原始会话预览”; malformed/unsafe files are skipped with a count. Listing must not call
+the LLM/business APIs or modify session files. No deletion is implemented.
+
+`session-info` requires login and reads only the current user's `sessions/`. It prints
+three lines: session ID, message count, and `in=<input_tokens> out=<output_tokens>` from
+the stored `usage` object. It does not resume chat. Missing, corrupt or inaccessible
+sessions should produce an error and exit code 1, not an uncaught traceback.
+
+Run the mocked regression suite:
+
+```bash
+python3 -m unittest tests.test_session_catalog -v
+```
+
+It covers limits/sorting, login expiry, user isolation, CLI/GUI agreement, corrupt files,
+symlink rejection and preview persistence through real runtime resume/compact paths with a fake model.
+
+### General maintenance
 
 Use this every time a new feature lands:
 

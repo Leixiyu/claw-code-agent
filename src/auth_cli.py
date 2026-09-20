@@ -1,6 +1,7 @@
 """CLI login and administrator-only local account provisioning."""
 from __future__ import annotations
 import getpass
+import argparse
 import json
 import os
 from pathlib import Path
@@ -9,10 +10,23 @@ from .auth_runtime import AuthStore, AuthenticationError
 from .user_workspace import atomic_json, initialize_user
 
 
+def _positive_limit(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError('limit must be a positive integer')
+    return number
+
+
 def add_auth_commands(subparsers):
-    for name in ('users-create', 'login', 'logout', 'whoami', 'migrate-user-data'):
-        parser = subparsers.add_parser(name, help=f'Prototype user management: {name}')
+    for name in ('users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info'):
+        help_text = ('Show a saved session summary for the logged-in user (does not resume chat)'
+                     if name == 'session-info' else f'Prototype user management: {name}')
+        parser = subparsers.add_parser(name, help=help_text)
         parser.add_argument('--workspace-root', default=os.environ.get('AGENT_WORKSPACE') or '.')
+        if name == 'session-info':
+            parser.add_argument('session_id')
+        if name == 'sessions':
+            parser.add_argument('--limit', type=_positive_limit, default=20)
         if name in {'users-create', 'login', 'migrate-user-data'}:
             parser.add_argument('username')
         if name == 'migrate-user-data':
@@ -47,6 +61,36 @@ def handle_auth_command(args):
         print('Logged out')
     elif args.command == 'whoami':
         print(json.dumps(store.authenticate(cli_token(store))))
+    elif args.command == 'session-info':
+        from .session_catalog import get_session_info
+        from .user_workspace import contained
+        user = store.authenticate(cli_token(store))
+        directory = contained(store.workspace, store.workspace / 'users' / user['user_id'] / 'sessions')
+        try:
+            info = get_session_info(args.session_id, directory=directory)
+        except FileNotFoundError as exc:
+            raise ValueError('Session not found for the current user, or invalid session ID.') from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError('Cannot read session: invalid or unsupported session data.') from exc
+        print(f"{info['session_id']}\n{info['message_count']} messages\nin={info['input_tokens']} out={info['output_tokens']}")
+    elif args.command == 'sessions':
+        from .session_catalog import list_saved_sessions
+        from .user_workspace import contained
+        user = store.authenticate(cli_token(store))
+        directory = contained(store.workspace, store.workspace / 'users' / user['user_id'] / 'sessions')
+        listing = list_saved_sessions(directory, limit=args.limit)
+        print(f"当前用户：{user['username']}")
+        print(f"共 {listing['total']} 个会话，显示 {len(listing['sessions'])} 个（北京时间）")
+        if not listing['sessions']:
+            print('当前用户暂无可读取的已保存会话。')
+        else:
+            print('更新时间             Session ID                        会话预览')
+            for item in listing['sessions']:
+                preview = item['preview'] or '无原始会话预览'
+                print(f"{item['modified_at_display']}  {item['session_id']}  {preview}")
+            print('\n继续聊天：claw-code-agent agent-chat --resume-session-id <session_id>')
+        if listing['skipped']:
+            print(f"已跳过 {listing['skipped']} 个损坏或不安全的会话文件。")
     else:
         from .user_migration import migrate_user_data
         user = store.find_user(args.username)

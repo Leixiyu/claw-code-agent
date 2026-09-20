@@ -483,8 +483,13 @@ async function saveSettings(ev) {
 // ---------------------------------------------------------------------------
 async function loadSessions() {
   try {
-    const sessions = await apiGet("/api/sessions");
+    const response = await fetch("/api/sessions");
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const sessions = await response.json();
     State.sessions = sessions;
+    const skipped = Number(response.headers.get("X-Session-Skipped") || 0);
+    $("#session-list-info").textContent = `共 ${sessions.length} 个会话` +
+      (skipped ? `，已跳过 ${skipped} 个损坏或不安全的文件` : "");
     renderSessions();
   } catch (e) {
     els.sessionList.innerHTML = `<div class="empty-state">${escapeHtml(e.message)}</div>`;
@@ -498,16 +503,33 @@ function renderSessions() {
     return;
   }
   for (const s of State.sessions) {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
     item.className = "session-item";
     if (s.session_id === State.activeSessionId) item.classList.add("active");
-    const preview = s.preview || "(no preview)";
+    const preview = s.preview || "无原始会话预览";
     item.innerHTML = `
-      <div class="session-preview">${escapeHtml(preview)}</div>
+      <button type="button" class="session-open" title="${escapeHtml(preview)}">
+        <span class="session-preview">${escapeHtml(preview)}</span>
+      </button>
+      <div class="session-meta">${escapeHtml(s.modified_at_display || "")} 北京时间</div>
       <div class="session-meta">${s.turns} turns · ${s.tool_calls} tools</div>
+      <input class="session-id" readonly aria-label="Session ID" value="${escapeHtml(s.session_id)}" />
+      <button type="button" class="session-copy btn-ghost">复制 ID</button>
     `;
-    item.addEventListener("click", () => openSession(s.session_id));
+    item.querySelector(".session-open").addEventListener("click", () => openSession(s.session_id));
+    item.querySelector(".session-id").addEventListener("click", (event) => event.target.select());
+    item.querySelector(".session-copy").addEventListener("click", async () => {
+      const input = item.querySelector(".session-id");
+      try {
+        await navigator.clipboard.writeText(s.session_id);
+        setStatus("ready", "Session ID 已复制");
+      } catch (_) {
+        // Clipboard API may be unavailable on a server accessed over HTTP.
+        input.focus();
+        input.select();
+        setStatus("ready", "请按 Ctrl+C / Cmd+C 复制已选中的完整 Session ID");
+      }
+    });
     els.sessionList.appendChild(item);
   }
 }

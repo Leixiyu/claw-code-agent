@@ -17,6 +17,8 @@ Done:
 - [x] Local-model execution through `Ollama`
 - [x] Local-model execution through `LiteLLM Proxy`
 - [x] Transcript-aware session object for the Python runtime
+- [x] Authenticated CLI/GUI session listings with stable first-query previews, Beijing timestamps and user isolation
+- [x] `session-info` uses authenticated per-user Agent sessions and reports stored message/token counts without resuming chat
 - [x] Session save and resume support
 - [x] Configurable max-turn execution
 - [x] Permission-aware tool execution
@@ -150,6 +152,7 @@ Done:
 - [x] `agents-update` command
 - [x] `agents-delete` command
 - [x] Local background session mode
+- [x] Shared authenticated background/daemon dispatch, per-user record/log validation, process birth checks and atomic persistence
 - [x] Local background session listing (`agent-ps`)
 - [x] Local background session logs (`agent-logs`)
 - [x] Local background attach snapshot (`agent-attach`)

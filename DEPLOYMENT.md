@@ -306,7 +306,26 @@ claw-code-agent agent-chat --show-transcript
 claw-code-agent logout
 ```
 
-agent、agent-chat、agent-resume 和后台 Agent 入口都需要有效登录。
+忘记 session ID 时，可查看当前用户的历史会话（默认最近 20 个）：
+
+```bash
+claw-code-agent sessions
+claw-code-agent sessions --limit 50
+claw-code-agent session-info <实际session_id>
+claw-code-agent agent-chat --resume-session-id <实际session_id> --show-transcript
+```
+
+列表按更新时间倒序，显示完整 ID、北京时间及首条用户 query 的预览（最多 80 字符）。
+新会话的预览独立保存，继续聊天或 `/compact` 不会改变它。旧会话只在能识别原始 query
+时提取预览；已压缩且缺失原始信息时显示“无原始会话预览”。损坏文件会跳过并报告数量。
+GUI 的 Sessions 列表使用相同逻辑，显示更新时间，并支持查看/复制完整 ID；
+普通 HTTP 下剪贴板不可用时，可选中 ID 后手动复制。列表不调用 LLM、不刷新业务状态，
+也不删除或改写历史会话；本次不提供会话删除功能。
+
+`session-info` 只读取当前用户的 Agent 会话，输出 ID、消息数量和输入/输出 token 数，
+不进入聊天、不修改会话；它不再读取旧的 `.port_sessions/<id>.json` 简化格式。
+原 CLI 名称 `load-session` 已移除，现有脚本需改用 `session-info`。
+sessions、session-info、agent、agent-chat、agent-resume 和后台 Agent 入口都需要有效登录。
 同一认证目录的 CLI 使用同一份 cli-token.json，后一次 login 会替换终端后续使用的
 默认凭证；同一 OS 账号上的多个测试终端不要假设彼此身份独立。
 普通多用户测试优先使用不同浏览器会话；脚本需要各自管理 Token。
@@ -483,6 +502,20 @@ ss -lntp | grep 8765
 日志可能包含业务信息，分享前脱敏。后台 Agent 的日志和进程记录在当前用户
 `.port_sessions/background/`，与 systemd Journal 是两套记录。
 后台启动使用当前用户凭证；过期/退出后不能再用该凭证启动新的操作。
+
+`agent-bg/agent-ps/agent-logs/agent-attach/agent-kill` 与对应的 `daemon` 子命令
+共用用户级后台运行逻辑，`daemon kill` 不再读取旧共享目录。不要手动调用
+`agent-bg-worker` 或 `daemon worker`；worker 必须与启动记录中的进程身份一致。
+后台 ID、记录/日志路径及关联会话路径都会校验；拒绝跨用户路径、符号链接和硬链接文件。
+记录采用原子写入，目录/文件的新建权限分别为 700/600。
+
+停止任务会核验进程启动标识与进程组，不只检查 PID。缺少启动标识的旧 running 记录
+仍可查询，但拒绝直接停止，应由服务器管理员核实实际进程；不要手动填造标识。
+停止 Harness 后台进程不会取消已经提交到 Business 服务的视频/训练任务。
+这些检查仍不是同一 OS 账号下的强安全沙箱，有服务器文件写权限的管理员仍应被信任。
+
+GUI 登录、聊天和会话查看不变；公共登录版继续禁止 `/api/background/*`，
+本轮不新增后台管理页面。内部开发路由已复用同一套目录/记录校验，并返回明确 HTTP 错误。
 
 ## 10. 开发回归与真实业务联调
 

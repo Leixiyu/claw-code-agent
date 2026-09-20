@@ -1,6 +1,6 @@
 # 视频 Agent：多用户 Prototype 进度与待开发需求
 
-最近更新：2026-09-16。当前以本地预置账号 + 用户目录 + Business HTTP Functions
+最近更新：2026-09-20。当前以本地预置账号 + 用户目录 + Business HTTP Functions
 构建 prototype；不代表生产级多租户隔离。部署以 DEPLOYMENT.md 为准。
 
 ## 已实现
@@ -9,6 +9,16 @@
 - [x] GUI 和 CLI Agent 入口要求认证；账号及凭证位于 Workspace 外。
 - [x] users/<user_id>/uploads、sessions、.port_sessions、runtime-home 目录初始化。
 - [x] CLI/GUI 会话目录统一；用户自己的会话查看、恢复和工具 task_id 归属检查。
+- [x] 新增认证后的 `sessions [--limit N]` 命令；CLI/GUI 共用只读列表逻辑，
+  显示 ID、北京时间、首条 query 预览；预览在压缩/恢复后保留，兼容旧会话和损坏文件。
+  GUI 支持复制完整 ID；本轮不包含删除会话。
+- [x] `session-info` 适配登录用户的 Agent 会话目录和 `usage` 格式，保留三行摘要输出，
+  不恢复聊天；缺失或格式错误的会话返回简明错误提示。
+  展示信息使用 `get_session_info()`；磁盘读取函数明确命名为 `read_agent_session()`、
+  `read_legacy_session()`，与恢复聊天的 `resume()` 区分。
+- [x] 后台 Agent/daemon 共用用户级入口；修复 daemon kill 目录遗漏，校验任务归属、
+  ID、记录/日志/会话路径及停止前的进程启动标识；原子保存记录并同步 worker 启动。
+  GUI 内部后台路由复用校验，公共登录版仍不开放后台管理；登录/聊天/会话功能保持可用。
 - [x] 网页上传视频、同名不覆盖、上传路径归入当前用户。
 - [x] 原九个 Business Functions 使用实时 API；只缓存索引状态，不独立保存业务结果。
 - [x] 三个任务索引保存 {"tasks": [{"task_id": "...", "status": "pending"}]}，去重、文件锁、原子写入。

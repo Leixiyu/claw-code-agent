@@ -75,7 +75,7 @@ from .worktree_runtime import WorktreeRuntime
 from .session_env_vars import clear_session_env_vars
 from .session_store import (
     StoredAgentSession,
-    load_agent_session,
+    read_agent_session,
     save_agent_session,
     serialize_model_config,
     serialize_runtime_config,
@@ -393,6 +393,10 @@ class LocalCodingAgent:
             system_context=stored_session.system_context,
             messages=stored_session.messages,
         )
+        from .session_catalog import session_preview
+        session.preview = session_preview({
+            'preview': stored_session.preview, 'messages': stored_session.messages,
+        })
         if self.authenticated_user_id:
             # Preserve conversation/tool history, but never restore obsolete
             # single-user system paths/policies from a migrated session.
@@ -494,6 +498,9 @@ class LocalCodingAgent:
                 scratchpad_directory=scratchpad_directory,
             )
         )
+        if session.preview is None:
+            from .session_catalog import normalize_preview
+            session.preview = normalize_preview(prompt) if not prompt.lstrip().startswith('/') else ''
         session.append_user(effective_prompt)
         self.last_session = session
         self.active_session_id = session_id
@@ -506,7 +513,7 @@ class LocalCodingAgent:
         starting_model_calls = 0
         if base_session is not None and self.resume_source_session_id:
             try:
-                stored_resume_state = load_agent_session(
+                stored_resume_state = read_agent_session(
                     self.resume_source_session_id,
                     directory=self.runtime_config.session_directory,
                 )
@@ -2493,7 +2500,7 @@ class LocalCodingAgent:
                 resume_used = False
                 if isinstance(resume_session_id, str) and resume_session_id:
                     try:
-                        stored_child_session = load_agent_session(
+                        stored_child_session = read_agent_session(
                             resume_session_id,
                             directory=child_runtime_config.session_directory,
                         )
@@ -3372,7 +3379,7 @@ class LocalCodingAgent:
         existing_path = self.runtime_config.session_directory / f'{result.session_id}.json'
         if existing_path.exists():
             try:
-                previous = load_agent_session(
+                previous = read_agent_session(
                     result.session_id,
                     directory=self.runtime_config.session_directory,
                 )
@@ -3394,6 +3401,7 @@ class LocalCodingAgent:
         }
         stored = StoredAgentSession(
             session_id=result.session_id,
+            preview=session.preview,
             model_config=serialize_model_config(self.model_config),
             runtime_config=serialize_runtime_config(self.runtime_config),
             system_prompt_parts=session.system_prompt_parts,

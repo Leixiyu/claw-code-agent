@@ -150,6 +150,7 @@ class AgentSessionState:
     system_context: dict[str, str] = field(default_factory=dict)
     messages: list[AgentMessage] = field(default_factory=list)
     mutation_serial: int = 0
+    preview: str | None = None
 
     @classmethod
     def create(

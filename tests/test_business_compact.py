@@ -13,7 +13,7 @@ from src.business_context import (
     build_reference_checkpoint, split_compaction_messages,
 )
 from src.compact import compact_conversation
-from src.session_store import load_agent_session
+from src.session_store import read_agent_session
 
 
 def tool_message(payload, name='get_video_processing_result', call_id='call1'):
@@ -170,12 +170,12 @@ class BusinessCompactTests(unittest.TestCase):
         # First save a real user-scoped session, then resume /compact as the CLI does.
         self.agent.client.complete.return_value = AssistantTurn('Ready', finish_reason='stop')
         seeded = self.agent.run('Do not train. Only explain analysis.')
-        stored = load_agent_session(seeded.session_id, self.root / 'sessions')
+        stored = read_agent_session(seeded.session_id, self.root / 'sessions')
         stored = replace(stored, messages=tuple(message.to_transcript_entry() for message in self.messages))
         self.agent.client.complete.return_value = AssistantTurn('<summary>Do not train. Next: Status.</summary>', finish_reason='stop')
         result = self.agent.resume('/compact', stored)
         self.assertIn('Conversation compacted', result.final_output)
-        saved = load_agent_session(seeded.session_id, self.root / 'sessions')
+        saved = read_agent_session(seeded.session_id, self.root / 'sessions')
         self.assertTrue(any(message.get('metadata', {}).get('kind') == 'compact_summary' for message in saved.messages))
         self.assertIn('task-running', str(saved.messages))
         self.assertNotIn('LARGE_BODY', str(saved.messages))

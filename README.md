@@ -290,6 +290,7 @@ claw-code-agent/
 │   ├── plugin_runtime.py         # Plugin manifest, hooks, aliases, virtual tools
 │   ├── agent_plugin_cache.py     # Plugin discovery & prompt injection cache
 │   ├── session_store.py          # Session serialization & persistence
+│   ├── session_catalog.py        # Shared CLI/GUI session listing and stable query previews
 │   ├── transcript.py             # Transcript block export & mutation tracking
 │   ├── query_engine.py           # Query engine facade & runtime orchestration
 │   ├── mcp_runtime.py            # Local MCP discovery and stdio MCP transport
@@ -329,6 +330,8 @@ claw-code-agent/
     ├── test_model_training.py        # Model-training HTTP Function and Tool tests
     ├── test_task_indexes.py          # Cached status, legacy indexes, done-only result lookup
     ├── test_business_compact.py      # Protected instructions, business summaries and recovery
+    ├── test_session_catalog.py       # User-scoped listings, previews and compaction persistence
+    ├── test_background_user_scope.py # Background ownership, process checks and GUI boundaries
     ├── test_agent_context.py
     ├── test_agent_context_usage.py
     ├── test_agent_prompting.py
@@ -528,6 +531,8 @@ python3 -m src.main agent \
 |---------|-------------|
 | `agent <prompt>` | Run the agent with a prompt |
 | `agent-chat [prompt]` | Start interactive multi-turn chat mode |
+| `sessions [--limit N]` | List the logged-in user's saved chats (default: 20), with IDs, Beijing update times and first-query previews |
+| `session-info <session_id>` | Show the logged-in user's saved session ID, message count and input/output tokens; does not resume chat |
 | `agent-bg <prompt>` | Run the agent in a local background session |
 | `agent-ps` | List local background sessions |
 | `agent-logs <id>` | Show background session logs |

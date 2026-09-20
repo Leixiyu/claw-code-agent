@@ -10,7 +10,7 @@ from .commands import build_command_backlog
 from .models import PermissionDenial, UsageSummary
 from .plugin_runtime import PluginRuntime
 from .port_manifest import PortManifest, build_port_manifest
-from .session_store import StoredSession, load_agent_session, load_session, save_session
+from .session_store import StoredSession, read_agent_session, read_legacy_session, save_session
 from .tools import build_tool_backlog
 from .transcript import TranscriptStore
 
@@ -78,7 +78,7 @@ class QueryEnginePort:
 
     @classmethod
     def from_saved_session(cls, session_id: str) -> 'QueryEnginePort':
-        stored = load_session(session_id)
+        stored = read_legacy_session(session_id)
         transcript = TranscriptStore(entries=list(stored.messages), flushed=True)
         return cls(
             manifest=build_port_manifest(),
@@ -391,7 +391,7 @@ class QueryEnginePort:
         assert self.runtime_agent is not None
         if self.last_turn is None or not self.last_turn.session_id:
             return self.runtime_agent.run(prompt)
-        stored = load_agent_session(
+        stored = read_agent_session(
             self.last_turn.session_id,
             directory=self.runtime_agent.runtime_config.session_directory,
         )
