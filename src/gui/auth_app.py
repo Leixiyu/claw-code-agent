@@ -28,6 +28,8 @@ def create_authenticated_app(template, auth_store=None):
     store = auth_store or AuthStore(template.cwd)
     root = store.workspace
     app = FastAPI(title='Claw Code authenticated prototype')
+    from .health_routes import create_health_router
+    app.include_router(create_health_router())
     user_apps = {}
     app.state.user_apps = user_apps
     app.state.auth_store = store

@@ -1,10 +1,14 @@
 # 视频 Agent：多用户 Prototype 进度与待开发需求
 
-最近更新：2026-09-20。当前以本地预置账号 + 用户目录 + Business HTTP Functions
+最近更新：2026-09-23。当前以本地预置账号 + 用户目录 + Business HTTP Functions
 构建 prototype；不代表生产级多租户隔离。部署以 DEPLOYMENT.md 为准。
 
 ## 已实现
 
+- [x] 新增无需登录的 `GET /health`：并发检查配置的模型健康 URL 和视频分析 `/health`，
+  返回各服务状态、耗时及汇总；5 秒单项超时，失败隔离，不泄露内部地址/凭证/原始响应。
+  `.env` 仅预留 `MODEL_API_HEALTH_URL`，健康探测不发送认证密钥。
+  预处理和训练目前无健康接口，明确标记未配置，不调用业务执行接口。
 - [x] 本地账号预创建、密码哈希、12 小时 Token、登录/退出/当前用户。
 - [x] GUI 和 CLI Agent 入口要求认证；账号及凭证位于 Workspace 外。
 - [x] users/<user_id>/uploads、sessions、.port_sessions、runtime-home 目录初始化。
@@ -84,6 +88,7 @@ Result 的唯一实时权威来源是 Business API。聊天中允许保留历史
 
 ## 后续优化
 
+- [ ] 后端提供健康接口后，接入视频预处理与模型训练的健康探测。
 - [ ] 真正的文件/Shell/进程或容器隔离，隔离插件、HOME、环境和凭证。
 - [ ] 登录限流、审计、账号禁用、密码重置、SSO、复杂权限与生产级 HTTPS。
 - [ ] 完整的多 Worker/多主机用户状态共享与分布式协调、资源配额、scratchpad/后台记录的独立生命周期清理

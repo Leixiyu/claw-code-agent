@@ -460,6 +460,8 @@ def create_app(state: AgentState, *, auth_store=None) -> FastAPI:
 
 def create_user_app(state: AgentState) -> FastAPI:
     app = FastAPI(title='Claw Code GUI', version='1.0')
+    from .health_routes import create_health_router
+    app.include_router(create_health_router())
 
     app.include_router(create_tasks_router(lambda: state.cwd))
     app.include_router(create_plans_router(lambda: state.cwd))

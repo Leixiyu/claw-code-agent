@@ -2026,6 +2026,26 @@ For deletion QA, use disposable test sessions, not valuable chat history:
 
 Restart all older CLI/GUI/worker processes before testing cross-process protection; old versions do not acquire these locks.
 
+### Dependency health API
+
+Run offline tests without hitting real services:
+
+```bash
+python3 -m unittest tests.test_gui_health_api -v
+```
+
+Coverage: public/internal `GET /health`, no login needed (other user APIs remain protected),
+parallel probes, 5-second wall-clock timeout, blank/invalid configuration, non-2xx responses,
+backend-declared failure, malformed/oversized response bodies, no redirects, and no credential forwarding.
+Tests use HTTPX MockTransport and temporary auth directories; they never make paid model calls.
+
+For server smoke testing, configure `MODEL_API_HEALTH_URL` and `VIDEO_ANALYSIS_API` in `.env`,
+restart the GUI service, then run `curl -sS --max-time 10 http://127.0.0.1:8765/health`.
+Expect two healthy and two not-configured services, overall `degraded` with HTTP 200.
+An unavailable configured endpoint should yield overall `unhealthy` with HTTP 503 while still reporting
+the other service's result. Missing configuration must not be counted as healthy. See DEPLOYMENT.md
+for the response contract. Health probes do not send an Authorization header; configure an unauthenticated endpoint.
+
 ### General maintenance
 
 Use this every time a new feature lands:

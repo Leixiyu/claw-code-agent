@@ -322,6 +322,7 @@ claw-code-agent/
 │       ├── __main__.py           # `python -m src.gui` entry point
 │       ├── server.py             # FastAPI app and JSON endpoints
 │       ├── auth_app.py           # Login, authenticated routing, user uploads
+│       ├── health_routes.py      # GET /health: concurrent model/video dependency probes and summary
 │       └── static/               # index.html, app.css, app.js, auth.js
 └── tests/                        # Unit and opt-in integration tests
     ├── test_agent_runtime.py
@@ -334,6 +335,7 @@ claw-code-agent/
     ├── test_session_catalog.py       # User-scoped listings, previews and compaction persistence
     ├── test_session_deletion.py      # Permanent deletion, running sessions, stale clients and user isolation
     ├── test_session_deletion_ui.js   # Mocked GUI confirmation, cancellation and deletion feedback
+    ├── test_gui_health_api.py        # Health aggregation, timeouts, HTTP errors and no credential forwarding
     ├── test_background_user_scope.py # Background ownership, process checks and GUI boundaries
     ├── test_agent_context.py
     ├── test_agent_context_usage.py
