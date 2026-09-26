@@ -49,7 +49,6 @@ from .remote_runtime import (
 from .remote_trigger_runtime import RemoteTriggerRuntime
 from .search_runtime import SearchRuntime
 from .team_runtime import TeamRuntime
-from .task_runtime import TaskRuntime
 from .workflow_runtime import WorkflowRuntime
 from .worktree_runtime import WorktreeRuntime
 from .runtime import PortRuntime
@@ -224,7 +223,7 @@ def _build_agent(args: argparse.Namespace) -> LocalCodingAgent:
             runtime_config=user_runtime_config(_build_runtime_config(args), args._user_workspace),
             override_system_prompt=user_prompt(args._workspace_container, args._user_workspace),
             tool_registry=user_tools(), on_tool_start=_print_tool_progress,
-            authenticated_user_id=args._user_id,
+            authenticated_user_id=args._user_id, usage_ledger=args._usage_ledger,
         )
     return LocalCodingAgent(
         model_config=_build_model_config(args),
@@ -563,6 +562,7 @@ def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, St
         validate_user_session(stored_session, args._user_workspace)
         runtime_config = user_runtime_config(runtime_config, args._user_workspace)
         user_options = dict(tool_registry=user_tools(), authenticated_user_id=args._user_id,
+                            usage_ledger=args._usage_ledger,
                             override_system_prompt=user_prompt(args._workspace_container, args._user_workspace))
     agent = LocalCodingAgent(
         model_config=model_config,
@@ -736,17 +736,17 @@ def build_parser() -> argparse.ArgumentParser:
     worktree_exit_parser.add_argument('--action', default='keep')
     worktree_exit_parser.add_argument('--discard-changes', action='store_true')
     worktree_exit_parser.add_argument('--cwd', default='.')
-    account_status_parser = subparsers.add_parser('account-status', help='show local account runtime status')
+    account_status_parser = subparsers.add_parser('account-status', help='show local provider-profile state (not Harness user authentication)')
     account_status_parser.add_argument('--cwd', default='.')
     account_profiles_parser = subparsers.add_parser('account-profiles', help='list configured local account profiles')
     account_profiles_parser.add_argument('--cwd', default='.')
     account_profiles_parser.add_argument('--query')
-    account_login_parser = subparsers.add_parser('account-login', help='activate a local account profile or ephemeral identity')
+    account_login_parser = subparsers.add_parser('account-login', help='activate local provider-profile metadata (does not authenticate)')
     account_login_parser.add_argument('target')
     account_login_parser.add_argument('--provider')
     account_login_parser.add_argument('--auth-mode')
     account_login_parser.add_argument('--cwd', default='.')
-    account_logout_parser = subparsers.add_parser('account-logout', help='clear the active local account session')
+    account_logout_parser = subparsers.add_parser('account-logout', help='deactivate local provider-profile metadata (does not log out of Harness)')
     account_logout_parser.add_argument('--cwd', default='.')
     ask_status_parser = subparsers.add_parser('ask-status', help='show local ask-user runtime status')
     ask_status_parser.add_argument('--cwd', default='.')
@@ -1022,9 +1022,10 @@ def main(argv: list[str] | None = None) -> int:
     load_project_env()
     parser = build_parser()
     args = parser.parse_args(argv)
-    from .auth_cli import handle_auth_command, prepare_user_args
+    from .auth_cli import AUTH_COMMANDS, handle_auth_command, prepare_user_args
+    from .usage_ledger import UsageLedgerError
     try:
-        if args.command in {'users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info', 'session-delete', 'sessions-clear'}:
+        if args.command in AUTH_COMMANDS:
             return handle_auth_command(args)
         if args.command.startswith('agent-') or args.command in {'agent', 'daemon', 'token-budget', 'agents'}:
             prepare_user_args(args)
@@ -1034,7 +1035,7 @@ def main(argv: list[str] | None = None) -> int:
             except FileNotFoundError:
                 print('Background task or file not found for the current user.', file=sys.stderr)
                 return 1
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, UsageLedgerError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     manifest = build_port_manifest()

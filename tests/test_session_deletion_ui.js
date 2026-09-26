@@ -17,7 +17,7 @@ function fixture({ confirm = true, report = { deleted: ['one'] }, status = 200 }
     window: { confirm(message) { calls.push(['confirm', message]); return confirm; } },
     setStatus(...args) { calls.push(['status', ...args]); },
     setBusy(busy) { state.isBusy = busy; calls.push(['status', busy ? 'busy' : 'ready', busy ? 'Working…' : 'Ready']); },
-    newSession() { state.activeSessionId = null; calls.push(['new']); },
+    resetConversationView() { state.activeSessionId = null; calls.push(['new']); },
     async loadSessions() { calls.push(['reload']); },
     async apiPost(url) { calls.push(['preview', url]); return { session_ids: ['one', 'two'] }; },
     async fetch(url, options) {
@@ -26,6 +26,12 @@ function fixture({ confirm = true, report = { deleted: ['one'] }, status = 200 }
     },
   };
   vm.createContext(context);
+  context.window.harnessFetch = context.fetch;
+  context.window.harnessReadResponse = async r => {
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.message || data.detail || `HTTP ${r.status}`);
+    return data;
+  };
   vm.runInContext(actions, context);
   return { context, calls, state };
 }

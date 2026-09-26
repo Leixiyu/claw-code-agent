@@ -113,7 +113,7 @@ class HealthProbeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HealthApiTests(unittest.TestCase):
-    def test_public_and_internal_routes_no_login_needed_and_no_user_created(self):
+    def test_only_public_app_has_health_no_login_needed_and_no_user_created(self):
         calls = []
 
         def handler(request):
@@ -128,7 +128,11 @@ class HealthApiTests(unittest.TestCase):
             state = AgentState(cwd=root, model='test', base_url='http://model.invalid/v1', api_key='chat-secret',
                                allow_shell=False, allow_write=False, session_directory=root / 'sessions')
             public_app = create_app(state)
-            for app in (public_app, create_user_app(state)):
+            # The inner app is instantiated per user and for static files; it must
+            # not register a duplicate health handler.
+            with TestClient(create_user_app(state)) as inner:
+                self.assertEqual(inner.get('/health').status_code, 404)
+            for app in (public_app,):
                 with TestClient(app) as client, patch.object(health.httpx, 'AsyncClient',
                         side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), trust_env=False, **kw)):
                     response = client.get('/health')
@@ -137,7 +141,7 @@ class HealthApiTests(unittest.TestCase):
                     self.assertEqual(response.headers['cache-control'], 'no-store')
                     self.assertNotIn('chat-secret', response.text)
                     client.get('/health')
-            self.assertEqual(len(calls), 8)  # Fresh GET probes on each health call.
+            self.assertEqual(len(calls), 4)  # Fresh GET probes on each health call.
             self.assertTrue(all(r.method == 'GET' and 'authorization' not in r.headers for r in calls))
             self.assertEqual(public_app.state.user_apps, {})
             with TestClient(public_app) as client:

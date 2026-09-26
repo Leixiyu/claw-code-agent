@@ -105,9 +105,13 @@ class GuiServerTests(unittest.TestCase):
             client, state = _build_client(Path(d))
             with patch.object(state.agent, 'run', side_effect=RuntimeError('test failure')):
                 response = client.post('/api/chat/stream', json={'prompt': 'test'})
-            self.assertEqual(json.loads(response.text), {
-                'type': 'error', 'error': 'test failure', 'error_type': 'RuntimeError',
-            })
+            event = json.loads(response.text)
+            self.assertEqual(event['type'], 'error')
+            self.assertEqual(event['code'], 'internal_error')
+            self.assertEqual(event['status'], 500)
+            self.assertEqual(event['message'], event['error'])
+            self.assertEqual(event['error_type'], 'RuntimeError')
+            self.assertNotIn('test failure', response.text)
             self.assertIsNone(state.agent.on_tool_start)
 
     def test_chat_stream_validates_prompt_and_reports_missing_resume(self) -> None:

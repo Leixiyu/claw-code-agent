@@ -60,6 +60,7 @@ body {
 }
 
 .sidebar-head {
+  flex-shrink: 0;
   padding: 16px;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -93,12 +94,39 @@ body {
   overflow-y: auto;
 }
 
-.sidebar-section:last-child {
-  flex: 0 0 auto;
+.sidebar-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
-.sidebar > .sidebar-section:nth-child(2) {
-  flex: 1 1 auto;
+.sidebar-footer {
+  flex-shrink: 0;
+  max-height: 50%;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.sidebar-user > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-user button {
+  flex-shrink: 0;
+}
+
+#usage-panel .session-meta {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .sidebar-title {
@@ -749,29 +777,7 @@ body {
   color: var(--accent);
 }
 
-/* View routing — every tab-specific surface gets `data-view-name` set in
-   markup. JS toggles `body[data-view=...]`, and the rule below hides any
-   surface whose name doesn't match. Only one negative rule per tab is
-   needed regardless of how many other tabs exist, and the original
-   `display:` from the surface's own rule is preserved when it's visible. */
-body[data-view="chat"] [data-view-name]:not([data-view-name="chat"]) { display: none !important; }
-body[data-view="tasks"] [data-view-name]:not([data-view-name="tasks"]) { display: none !important; }
-body[data-view="plan"] [data-view-name]:not([data-view-name="plan"]) { display: none !important; }
-body[data-view="memory"] [data-view-name]:not([data-view-name="memory"]) { display: none !important; }
-body[data-view="history"] [data-view-name]:not([data-view-name="history"]) { display: none !important; }
-body[data-view="bg"] [data-view-name]:not([data-view-name="bg"]) { display: none !important; }
-body[data-view="worktree"] [data-view-name]:not([data-view-name="worktree"]) { display: none !important; }
-body[data-view="skills"] [data-view-name]:not([data-view-name="skills"]) { display: none !important; }
-body[data-view="account"] [data-view-name]:not([data-view-name="account"]) { display: none !important; }
-body[data-view="remote"] [data-view-name]:not([data-view-name="remote"]) { display: none !important; }
-body[data-view="mcp"] [data-view-name]:not([data-view-name="mcp"]) { display: none !important; }
-body[data-view="plugins"] [data-view-name]:not([data-view-name="plugins"]) { display: none !important; }
-body[data-view="ask"] [data-view-name]:not([data-view-name="ask"]) { display: none !important; }
-body[data-view="workflows"] [data-view-name]:not([data-view-name="workflows"]) { display: none !important; }
-body[data-view="search"] [data-view-name]:not([data-view-name="search"]) { display: none !important; }
-body[data-view="triggers"] [data-view-name]:not([data-view-name="triggers"]) { display: none !important; }
-body[data-view="teams"] [data-view-name]:not([data-view-name="teams"]) { display: none !important; }
-body[data-view="diag"] [data-view-name]:not([data-view-name="diag"]) { display: none !important; }
+
 
 /* Tasks panel */
 .tasks-view {
@@ -1206,3 +1212,26 @@ body[data-view="diag"] [data-view-name]:not([data-view-name="diag"]) { display: 
   }
 }
 [hidden] { display: none !important; }
+
+/* Lifetime usage request details. */
+.usage-dialog { width: min(1000px, 94vw); max-height: 85vh; overflow: auto; color: inherit; background: var(--bg, #15171c); border: 1px solid #555; border-radius: 12px; padding: 20px; }
+.usage-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.usage-dialog-head, .usage-filters, .usage-pagination { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.usage-dialog-head { justify-content: space-between; }
+.usage-filters label { display: flex; flex-direction: column; gap: 5px; }
+.usage-table-scroll { overflow-x: auto; margin: 16px 0; }
+.usage-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.usage-table th, .usage-table td { border-bottom: 1px solid #555; padding: 10px; vertical-align: top; min-width: 110px; }
+.usage-table td { overflow-wrap: anywhere; max-width: 280px; white-space: pre-line; }
+
+
+
+.usage-dialog button, .usage-dialog input, .usage-dialog select { color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; }
+.usage-dialog button:not(:disabled) { cursor: pointer; }
+.usage-dialog button:disabled { opacity: .45; }
+
+/* Text actions must not inherit the fixed 32px icon-button width. */
+#clear-btn, #account-logout, .session-actions .btn-ghost { width: auto; white-space: nowrap; flex-shrink: 0; }
+.topbar-left { min-width: 0; }
+.topbar-right { flex-shrink: 0; }
+#status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

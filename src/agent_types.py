@@ -115,6 +115,7 @@ class AssistantTurn:
     finish_reason: str | None = None
     raw_message: JSONDict = field(default_factory=dict)
     usage: UsageStats = field(default_factory=UsageStats)
+    usage_reported: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,7 @@ class StreamEvent:
     finish_reason: str | None = None
     usage: UsageStats = field(default_factory=UsageStats)
     raw_event: JSONDict = field(default_factory=dict)
+    usage_reported: bool | None = None
 
     def to_dict(self) -> JSONDict:
         return {
@@ -185,6 +187,7 @@ class AgentRunResult:
     transcript: tuple[JSONDict, ...]
     events: tuple[JSONDict, ...] = ()
     usage: UsageStats = field(default_factory=UsageStats)
+    run_usage: UsageStats = field(default_factory=UsageStats)
     total_cost_usd: float = 0.0
     stop_reason: str | None = None
     file_history: tuple[JSONDict, ...] = ()

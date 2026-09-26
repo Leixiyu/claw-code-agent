@@ -12,7 +12,7 @@ Bundled skills differ from slash commands:
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:

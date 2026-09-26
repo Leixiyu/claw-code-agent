@@ -88,18 +88,39 @@ def _optional_int(value: Any) -> int:
     return 0
 
 
+def _usage_reported(payload: Any) -> bool:
+    """A known zero requires real input/output counters, not null/missing fields."""
+    if not isinstance(payload, dict):
+        return False
+    def has_counter(names):
+        for name in names:
+            value = payload.get(name)
+            if isinstance(value, bool) or value is None:
+                continue
+            try:
+                if int(value) >= 0 and str(value).strip() == str(int(value)):
+                    return True
+            except (ValueError, TypeError, OverflowError):
+                pass
+        return False
+    return (has_counter(('input_tokens', 'prompt_tokens', 'prompt_eval_count'))
+            and has_counter(('output_tokens', 'completion_tokens', 'eval_count')))
+
+
 def _parse_usage(payload: Any) -> UsageStats:
     if not isinstance(payload, dict):
         return UsageStats()
-    completion_details = payload.get('completion_tokens_details')
+    completion_details = payload.get('completion_tokens_details') or payload.get('output_tokens_details')
     if not isinstance(completion_details, dict):
         completion_details = {}
+    prompt_details = payload.get('prompt_tokens_details') or payload.get('input_tokens_details') or {}
+    cached = max(0, _optional_int(prompt_details.get('cached_tokens'))) if isinstance(prompt_details, dict) else 0
     return UsageStats(
-        input_tokens=(
+        input_tokens=max(0, (
             _optional_int(payload.get('input_tokens'))
             or _optional_int(payload.get('prompt_tokens'))
             or _optional_int(payload.get('prompt_eval_count'))
-        ),
+        ) - cached),
         output_tokens=(
             _optional_int(payload.get('output_tokens'))
             or _optional_int(payload.get('completion_tokens'))
@@ -108,7 +129,7 @@ def _parse_usage(payload: Any) -> UsageStats:
         cache_creation_input_tokens=_optional_int(
             payload.get('cache_creation_input_tokens')
         ),
-        cache_read_input_tokens=_optional_int(payload.get('cache_read_input_tokens')),
+        cache_read_input_tokens=cached or _optional_int(payload.get('cache_read_input_tokens')),
         reasoning_tokens=(
             _optional_int(payload.get('reasoning_tokens'))
             or _optional_int(completion_details.get('reasoning_tokens'))
@@ -176,6 +197,7 @@ class OpenAICompatClient:
             finish_reason=finish_reason,
             raw_message=message,
             usage=_parse_usage(payload.get('usage')),
+            usage_reported=_usage_reported(payload.get('usage')),
         )
 
     def stream(
@@ -346,10 +368,11 @@ class OpenAICompatClient:
         payload: dict[str, Any],
     ) -> Iterator[StreamEvent]:
         usage = _parse_usage(payload.get('usage'))
-        if usage.total_tokens:
+        if usage.total_tokens or _usage_reported(payload.get('usage')):
             yield StreamEvent(
                 type='usage',
                 usage=usage,
+                usage_reported=_usage_reported(payload.get('usage')),
                 raw_event=payload,
             )
 

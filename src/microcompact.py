@@ -11,8 +11,7 @@ API call.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from .agent_context_usage import estimate_tokens
 from .agent_session import AgentMessage
@@ -81,7 +80,7 @@ def _find_last_assistant_timestamp(messages: list[AgentMessage]) -> float | None
             return float(ts)
         if isinstance(ts, str):
             try:
-                from datetime import datetime, timezone
+                from datetime import datetime
                 dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
                 return dt.timestamp()
             except (ValueError, TypeError):

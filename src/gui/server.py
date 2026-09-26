@@ -40,7 +40,6 @@ from ..session_lifecycle import (
     delete_saved_session, session_deletion_candidates,
 )
 from ..session_store import (
-    DEFAULT_AGENT_SESSION_DIR,
     StoredAgentSession,
     read_agent_session,
 )
@@ -453,6 +452,18 @@ class StateUpdate(BaseModel):
 # App factory
 # ---------------------------------------------------------------------------
 
+def mount_gui_assets(app: FastAPI) -> None:
+    app.mount(
+        '/static',
+        StaticFiles(directory=str(STATIC_DIR)),
+        name='static',
+    )
+
+    @app.get('/', include_in_schema=False)
+    async def root() -> FileResponse:
+        return FileResponse(STATIC_DIR / 'index.html')
+
+
 def create_app(state: AgentState, *, auth_store=None) -> FastAPI:
     from .auth_app import create_authenticated_app
     return create_authenticated_app(state, auth_store)
@@ -460,8 +471,8 @@ def create_app(state: AgentState, *, auth_store=None) -> FastAPI:
 
 def create_user_app(state: AgentState) -> FastAPI:
     app = FastAPI(title='Claw Code GUI', version='1.0')
-    from .health_routes import create_health_router
-    app.include_router(create_health_router())
+    from .api_errors import install_error_handlers, exception_payload, error_payload
+    install_error_handlers(app)
 
     app.include_router(create_tasks_router(lambda: state.cwd))
     app.include_router(create_plans_router(lambda: state.cwd))
@@ -537,16 +548,7 @@ def create_user_app(state: AgentState) -> FastAPI:
     )
     app.include_router(create_diagnostics_router())
 
-    # ------------- static + index ------------------------------------------
-    app.mount(
-        '/static',
-        StaticFiles(directory=str(STATIC_DIR)),
-        name='static',
-    )
-
-    @app.get('/', include_in_schema=False)
-    async def root() -> FileResponse:
-        return FileResponse(STATIC_DIR / 'index.html')
+    mount_gui_assets(app)
 
     # ------------- info ------------------------------------------------------
     @app.get('/api/state')
@@ -566,7 +568,9 @@ def create_user_app(state: AgentState) -> FastAPI:
     @app.get('/api/slash-commands')
     async def list_slash_commands() -> list[dict[str, Any]]:
         commands: list[dict[str, Any]] = []
-        for spec in get_slash_command_specs():
+        from ..user_access import user_commands
+        specs = user_commands() if state.agent.authenticated_user_id else get_slash_command_specs()
+        for spec in specs:
             commands.append(
                 {
                     'names': list(spec.names),
@@ -578,6 +582,7 @@ def create_user_app(state: AgentState) -> FastAPI:
 
     @app.get('/api/skills')
     async def list_skills(include_internal: bool = False) -> list[dict[str, Any]]:
+        from ..user_access import user_skills
         return [
             {
                 'name': skill.name,
@@ -587,7 +592,8 @@ def create_user_app(state: AgentState) -> FastAPI:
                 'allowed_tools': list(skill.allowed_tools),
                 'user_invocable': skill.user_invocable,
             }
-            for skill in get_bundled_skills()
+            for skill in (user_skills()
+                          if state.agent.authenticated_user_id else get_bundled_skills())
             if include_internal or skill.user_invocable
         ]
 
@@ -718,7 +724,18 @@ def create_user_app(state: AgentState) -> FastAPI:
                     result = agent.resume(prompt, stored)
                 else:
                     result = agent.run(prompt)
-                return _serialize_run_result(result)
+                payload = _serialize_run_result(result)
+                failures = {
+                    'permission_denied': (403, 'feature_unavailable', '此命令不可用，请使用 /help 查看可用命令。'),
+                    'backend_error': (502, 'model_backend_error', '模型服务请求失败，请稍后重试。'),
+                    'budget_exceeded': (409, 'budget_exceeded', '本次请求已达到用量或执行次数限制。'),
+                    'prompt_too_long': (413, 'context_too_large', '对话内容超过模型容量，请压缩对话或开始新对话。'),
+                }
+                if result.stop_reason in failures:
+                    status, code, message = failures[result.stop_reason]
+                    payload.update(error_payload(status, message, code=code, error_type='AgentRunError'))
+                    payload['final_output'] = message
+                return payload
             except SessionDeletedError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except SessionBusyError as exc:
@@ -731,16 +748,10 @@ def create_user_app(state: AgentState) -> FastAPI:
         prompt = _chat_prompt(request)
         try:
             payload = await asyncio.to_thread(_run_chat, request, prompt)
-        except HTTPException:
-            raise
-        except Exception as exc:  # surface the error in the UI
-            return JSONResponse(
-                status_code=500,
-                content={
-                    'error': str(exc),
-                    'error_type': type(exc).__name__,
-                },
-            )
+        except Exception as exc:
+            payload = exception_payload(exc)
+        if 'code' in payload:
+            return JSONResponse(payload, status_code=payload['status'])
         return payload
 
     # Keep workers alive on disconnect: losing the display must not cancel or
@@ -763,13 +774,9 @@ def create_user_app(state: AgentState) -> FastAPI:
             def run() -> None:
                 try:
                     result = _run_chat(request, prompt, emit)
-                    emit({'type': 'result', 'data': result})
+                    emit({'type': 'error', **result} if 'code' in result else {'type': 'result', 'data': result})
                 except Exception as exc:
-                    emit({
-                        'type': 'error',
-                        'error': str(exc.detail) if isinstance(exc, HTTPException) else str(exc),
-                        'error_type': type(exc).__name__,
-                    })
+                    emit({'type': 'error', **exception_payload(exc)})
 
             worker = asyncio.create_task(asyncio.to_thread(run))
             chat_workers.add(worker)
@@ -793,10 +800,16 @@ def create_user_app(state: AgentState) -> FastAPI:
         )
 
     @app.post('/api/clear')
-    async def clear_state() -> dict[str, Any]:
-        with state.lock():
+    def clear_state() -> dict[str, Any]:
+        # Never queue a reset behind an in-flight reply or block the event loop.
+        lock = state.lock()
+        if not lock.acquire(blocking=False):
+            raise HTTPException(409, '当前用户有回复正在生成，请完成后再清除状态。')
+        try:
             state.agent.clear_runtime_state()
-        return state.snapshot()
+            return {**state.snapshot(), 'action': 'runtime_state_cleared'}
+        finally:
+            lock.release()
 
     return app
 
@@ -813,6 +826,7 @@ def _serialize_run_result(result: Any) -> dict[str, Any]:
         'transcript': [_normalize_transcript_entry(entry) for entry in result.transcript],
         'session_id': result.session_id,
         'usage': result.usage.to_dict(),
+        'run_usage': result.run_usage.to_dict(),
         'total_cost_usd': result.total_cost_usd,
         'stop_reason': result.stop_reason,
     }

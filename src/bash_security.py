@@ -46,10 +46,6 @@ def _ask(message: str, *, misparsing: bool = False) -> SecurityResult:
     return SecurityResult(SecurityBehavior.ASK, message, is_misparsing=misparsing)
 
 
-def _deny(message: str) -> SecurityResult:
-    return SecurityResult(SecurityBehavior.DENY, message)
-
-
 def _passthrough(message: str = '') -> SecurityResult:
     return SecurityResult(SecurityBehavior.PASSTHROUGH, message)
 

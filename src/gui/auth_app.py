@@ -4,11 +4,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
-from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
+from typing import Literal
+
+from .api_errors import install_error_handlers, error_response
+from ..user_access import user_can_http, user_capabilities
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.requests import Request as ScopeRequest
@@ -24,21 +27,23 @@ class LoginRequest(BaseModel):
 
 
 def create_authenticated_app(template, auth_store=None):
-    from .server import AgentState, create_user_app
+    from .server import AgentState, create_user_app, mount_gui_assets
     store = auth_store or AuthStore(template.cwd)
     root = store.workspace
+    ledger = store.usage_ledger()
     app = FastAPI(title='Claw Code authenticated prototype')
     from .health_routes import create_health_router
     app.include_router(create_health_router())
     user_apps = {}
     app.state.user_apps = user_apps
     app.state.auth_store = store
-    public_files = create_user_app(template)
+    mount_gui_assets(app)
 
     def user_app(user):
         user_id = user['user_id']
         if user_id not in user_apps:
             workspace = initialize_user(root, user_id)
+            ledger.import_sessions(user_id, workspace / 'sessions')
             settings = {key: getattr(template, key) for key in inspect.signature(AgentState).parameters}
             settings.update(cwd=workspace, session_directory=workspace / 'sessions',
                             allow_shell=False, allow_write=False, disable_claude_md_discovery=True,
@@ -50,6 +55,7 @@ def create_authenticated_app(template, auth_store=None):
             from ..agent_tools import build_tool_context
             state.agent.tool_context = build_tool_context(state.agent.runtime_config, tool_registry=state.agent.tool_registry)
             state.agent.authenticated_user_id = user_id
+            state.agent.usage_ledger = ledger
             inner = create_user_app(state)
             inner.state.agent_state = state
             user_apps[user_id] = inner
@@ -65,6 +71,23 @@ def create_authenticated_app(template, auth_store=None):
         response.set_cookie('harness_session', payload['access_token'], httponly=True,
                             secure=request.url.scheme == 'https', samesite='strict', max_age=43200)
         return response
+
+    @app.get('/api/capabilities')
+    async def capabilities():
+        return user_capabilities()
+
+    @app.get('/api/usage/requests')
+    async def usage_requests(request: Request, limit: int = Query(20, ge=1, le=100),
+                             offset: int = Query(0, ge=0), session_id: str | None = None,
+                             status: Literal['in_progress', 'confirmed', 'unresolved'] | None = None):
+        user_id = request.scope['auth_user']['user_id']
+        await asyncio.to_thread(ledger.import_sessions, user_id, root / 'users' / user_id / 'sessions')
+        return await asyncio.to_thread(ledger.requests, user_id,
+                                       limit=limit, offset=offset, session_id=session_id, status=status)
+
+    @app.get('/api/usage')
+    async def usage(request: Request):
+        return await asyncio.to_thread(store.usage_summary, request.scope['auth_user']['user_id'])
 
     @app.get('/api/auth/me')
     async def me(request: Request):
@@ -115,23 +138,17 @@ def create_authenticated_app(template, auth_store=None):
         async def __call__(self, scope, receive, send):
             path = scope.get('path', '')
             if path.startswith('/api/'):
-                # Administrative features of the original single-user GUI are
-                # intentionally unavailable to prototype end users.
-                allowed = {'/api/chat', '/api/chat/stream', '/api/clear', '/api/state',
-                           '/api/sessions', '/api/slash-commands', '/api/skills'}
-                if path not in allowed and not path.startswith('/api/sessions/'):
-                    return await JSONResponse({'detail': 'unavailable in prototype'}, 403)(scope, receive, send)
-                if path == '/api/state' and scope['method'] != 'GET':
-                    return await JSONResponse({'detail': 'settings are administrator-managed'}, 403)(scope, receive, send)
                 if scope['method'] == 'DELETE' or path == '/api/sessions/clear-preview':
                     from ..session_lifecycle import session_path
                     try:
                         session_path(root / 'users' / scope['auth_user']['user_id'] / 'sessions', '_scope_check')
                     except (OSError, ValueError):
-                        return await JSONResponse({'detail': 'unsafe user session directory'}, 403)(scope, receive, send)
+                        return await error_response(403, 'unsafe user session directory')(scope, receive, send)
+                if scope['method'] == 'DELETE':
+                    await asyncio.to_thread(store.usage_summary, scope['auth_user']['user_id'])
                 target = user_app(scope['auth_user'])
             else:
-                target = public_files
+                return await error_response(404, 'Not Found')(scope, receive, send)
             await target(scope, receive, send)
 
     app.mount('/', Dispatch())
@@ -145,19 +162,24 @@ def create_authenticated_app(template, auth_store=None):
                 return await self.app(scope, receive, send)
             request = ScopeRequest(scope)
             path = scope['path']
+            if path == '/health' and not user_can_http(scope['method'], path):
+                return await error_response(403, '此接口不可用。', code='feature_unavailable')(scope, receive, send)
             if path.startswith('/api/'):
                 origin = request.headers.get('origin')
                 if origin and urlsplit(origin).netloc != request.url.netloc:
-                    return await JSONResponse({'detail': 'cross-origin request rejected'}, 403)(scope, receive, send)
+                    return await error_response(403, 'cross-origin request rejected', code='cross_origin_rejected')(scope, receive, send)
                 if path != '/api/auth/login':
                     authorization = request.headers.get('authorization', '')
                     token = authorization[7:] if authorization.startswith('Bearer ') else request.cookies.get('harness_session', '')
                     try:
                         scope['auth_user'] = store.authenticate(token)
                         scope['auth_token'] = token
-                    except AuthenticationError as exc:
-                        return await JSONResponse({'detail': str(exc)}, 401)(scope, receive, send)
+                    except AuthenticationError:
+                        return await error_response(401, '登录已失效或未登录，请重新登录。')(scope, receive, send)
+                if not user_can_http(scope['method'], path):
+                    return await error_response(403, '此接口不可用。', code='feature_unavailable')(scope, receive, send)
             await self.app(scope, receive, send)
 
     app.add_middleware(AuthenticationMiddleware)
+    install_error_handlers(app)
     return app

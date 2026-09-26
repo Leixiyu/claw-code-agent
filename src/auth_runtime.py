@@ -41,6 +41,15 @@ class AuthStore:
             ''')
         os.chmod(self.path, 0o600)
 
+    def usage_ledger(self):
+        from .usage_ledger import UsageLedger
+        return UsageLedger(self.directory)
+
+    def usage_summary(self, user_id):
+        ledger = self.usage_ledger()
+        report = ledger.import_sessions(user_id, self.workspace / 'users' / user_id / 'sessions')
+        return {**ledger.summary(user_id), 'history_import_skipped': report['skipped_sessions']}
+
     @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)

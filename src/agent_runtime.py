@@ -55,7 +55,6 @@ from .agent_types import (
     AssistantTurn,
     BudgetConfig,
     ModelConfig,
-    OutputSchemaConfig,
     StreamEvent,
     ToolCall,
     ToolExecutionResult,
@@ -135,6 +134,8 @@ class LocalCodingAgent:
     worktree_runtime: WorktreeRuntime | None = None
     on_tool_start: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
     authenticated_user_id: str | None = None
+    usage_ledger: Any = field(default=None, repr=False)
+    usage_run_id: str = field(default="", init=False, repr=False)
     last_session: AgentSessionState | None = field(default=None, init=False, repr=False)
     last_run_result: AgentRunResult | None = field(default=None, init=False, repr=False)
     cumulative_usage: UsageStats = field(default_factory=UsageStats, init=False, repr=False)
@@ -251,6 +252,8 @@ class LocalCodingAgent:
         self.client = OpenAICompatClient(self.model_config)
 
     def clear_runtime_state(self) -> None:
+        self.cumulative_usage = UsageStats()
+        self.cumulative_cost_usd = 0.0
         self.last_session = None
         self.last_run_result = None
         self.active_session_id = None
@@ -468,7 +471,36 @@ class LocalCodingAgent:
                 existing_file_history=existing_file_history,
             )
 
-    def _run_prompt_locked(
+    def _run_prompt_locked(self, prompt, *, base_session, session_id,
+                           scratchpad_directory, existing_file_history):
+        is_command = prompt.lstrip().startswith('/')
+        target_id = self.active_session_id if is_command else session_id
+        self.usage_run_id = uuid4().hex
+        if self.usage_ledger is not None and self.authenticated_user_id and target_id:
+            self.usage_ledger.ensure_session(self.authenticated_user_id, target_id,
+                                             self.runtime_config.session_directory)
+        starting_usage = self.cumulative_usage if is_command else UsageStats()
+        starting_cost = self.cumulative_cost_usd if is_command else 0.0
+        if target_id and (is_command or base_session is not None):
+            try:
+                stored = read_agent_session(target_id, directory=self.runtime_config.session_directory)
+                starting_usage = usage_from_payload(stored.usage)
+                starting_cost = stored.total_cost_usd
+            except FileNotFoundError:
+                pass
+        self.cumulative_usage = starting_usage
+        self.cumulative_cost_usd = starting_cost
+        result = self._execute_prompt_locked(prompt, base_session=base_session, session_id=session_id,
+            scratchpad_directory=scratchpad_directory, existing_file_history=existing_file_history)
+        run_usage = UsageStats(**{key: max(0, getattr(result.usage, key) - getattr(starting_usage, key))
+                                  for key in ('input_tokens', 'output_tokens', 'cache_creation_input_tokens',
+                                              'cache_read_input_tokens', 'reasoning_tokens')})
+        result = replace(result, run_usage=run_usage)
+        if self.last_run_result is not None:
+            self.last_run_result = result
+        return result
+
+    def _execute_prompt_locked(
         self,
         prompt: str,
         *,
@@ -479,22 +511,26 @@ class LocalCodingAgent:
     ) -> AgentRunResult:
         if self.authenticated_user_id and prompt.strip().startswith('/'):
             command = prompt.strip().split()[0]
-            if command not in {'/clear', '/help', '/compact'}:
+            from .user_access import user_can_command
+            if not user_can_command(command[1:]):
                 return AgentRunResult(
-                    final_output='This command is unavailable in the authenticated prototype. Use /clear, /compact or normal chat.',
+                    final_output='This command is unavailable. Use /help to see available commands.',
+                    stop_reason='permission_denied',
                     turns=0, tool_calls=0, transcript=(), session_id=self.active_session_id,
+                    usage=self.cumulative_usage, total_cost_usd=self.cumulative_cost_usd,
                 )
         slash_result = preprocess_slash_command(self, prompt)
         if slash_result.handled and not slash_result.should_query:
             result = AgentRunResult(
                 final_output=slash_result.output,
+                stop_reason='state_cleared' if slash_result.state_cleared else 'end_turn',
                 turns=0,
                 tool_calls=0,
                 transcript=slash_result.transcript,
                 session_id=self.active_session_id,
                 session_path=self.last_session_path,
-                usage=slash_result.usage,
-                total_cost_usd=self.model_config.pricing.estimate_cost_usd(slash_result.usage),
+                usage=self.cumulative_usage + slash_result.usage,
+                total_cost_usd=self.cumulative_cost_usd + self.model_config.pricing.estimate_cost_usd(slash_result.usage),
                 file_history=tuple(existing_file_history),
                 scratchpad_directory=(
                     str(scratchpad_directory) if scratchpad_directory is not None else None
@@ -1241,13 +1277,23 @@ class LocalCodingAgent:
         self.last_run_result = result
         return result
 
+    def metered_client(self, purpose='chat'):
+        if self.usage_ledger is None or not self.authenticated_user_id:
+            return self.client
+        if not self.active_session_id:
+            raise RuntimeError('A session is required before a metered model call.')
+        from .usage_ledger import MeteredClient
+        return MeteredClient(self.client, self.usage_ledger, self.authenticated_user_id,
+                             self.active_session_id, self.usage_run_id,
+                             self.model_config.model, purpose)
+
     def _query_model(
         self,
         session: AgentSessionState,
         tool_specs: list[dict[str, object]],
     ) -> tuple[AssistantTurn, tuple[StreamEvent, ...]]:
         if not self.runtime_config.stream_model_responses:
-            turn = self.client.complete(
+            turn = self.metered_client().complete(
                 session.to_openai_messages(),
                 tool_specs,
                 output_schema=self.runtime_config.output_schema,
@@ -1281,7 +1327,7 @@ class LocalCodingAgent:
         usage = UsageStats()
         finish_reason: str | None = None
         events: list[StreamEvent] = []
-        for event in self.client.stream(
+        for event in self.metered_client().stream(
             session.to_openai_messages(),
             tool_specs,
             output_schema=self.runtime_config.output_schema,
@@ -1298,7 +1344,7 @@ class LocalCodingAgent:
                     arguments_delta=event.arguments_delta,
                 )
             elif event.type == 'usage':
-                usage = usage + event.usage
+                usage = event.usage
             elif event.type == 'message_stop':
                 finish_reason = event.finish_reason
 
@@ -1440,6 +1486,7 @@ class LocalCodingAgent:
         *,
         turn_index: int,
     ) -> PromptPreflightResult:
+        failed_compact_usage = UsageStats()
         snapshot = calculate_token_budget(
             session=session,
             model=self.model_config.model,
@@ -1560,6 +1607,7 @@ class LocalCodingAgent:
                     reason=self._build_prompt_length_error(recovered) if recovered.exceeds_hard_limit else None,
                 )
             else:
+                failed_compact_usage = compact_result.usage
                 self._compact_consecutive_failures += 1
                 stream_events.append(
                     {
@@ -1572,6 +1620,8 @@ class LocalCodingAgent:
 
         if snapshot.exceeds_hard_limit:
             return PromptPreflightResult(
+                usage_increment=failed_compact_usage,
+                model_calls_increment=int(bool(failed_compact_usage.total_tokens)),
                 stop_reason='prompt_too_long',
                 reason=self._build_prompt_length_error(snapshot),
             )
@@ -1586,7 +1636,8 @@ class LocalCodingAgent:
                 'soft_overflow_tokens': snapshot.soft_overflow_tokens,
             }
         )
-        return PromptPreflightResult()
+        return PromptPreflightResult(usage_increment=failed_compact_usage,
+                                     model_calls_increment=int(bool(failed_compact_usage.total_tokens)))
 
     def _can_auto_compact_with_summary(self, session: AgentSessionState) -> bool:
         prefix_count = self._compact_prefix_count(session)
@@ -2508,6 +2559,8 @@ class LocalCodingAgent:
                     managed_child_index=index,
                     managed_label=subtask_label,
                     on_tool_start=self.on_tool_start,
+                    authenticated_user_id=self.authenticated_user_id,
+                    usage_ledger=self.usage_ledger,
                 )
                 if group_id is not None and child_agent.managed_agent_id is not None:
                     self.agent_manager.register_group_child(
@@ -4220,9 +4273,9 @@ class LocalCodingAgent:
         self.resume_source_session_id = None
 
     def _accumulate_usage(self, result: AgentRunResult) -> None:
-        """Add a run's usage to the cumulative session totals."""
-        self.cumulative_usage = self.cumulative_usage + result.usage
-        self.cumulative_cost_usd += result.total_cost_usd
+        """Results already contain session totals, including resumed history."""
+        self.cumulative_usage = result.usage
+        self.cumulative_cost_usd = result.total_cost_usd
 
     def _refresh_runtime_views_for_tool_result(
         self,

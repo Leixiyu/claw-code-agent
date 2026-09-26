@@ -92,7 +92,7 @@ Originals are preserved by the explicit migration command; no data is deleted on
 | 🆕 | **GUI Background Sessions** | New **Background** tab lists detached `agent-bg` runs (running/exited/completed/failed), shows live logs, and lets you kill a running session — same `BackgroundSessionRuntime` the CLI uses |
 | 🆕 | **GUI Worktree View** | New **Worktree** tab — show status & history, create a managed `git worktree` (auto-switches the agent's cwd), and exit it (keep or remove); state survives reload via `WorktreeRuntime` |
 | 🆕 | **GUI Skills Marketplace** | New **Skills** tab — card grid of every bundled skill with description, when-to-use, aliases, and allowed tools; "Use in chat" button drops the invocation into the composer |
-| 🆕 | **GUI Accounts View** | New **Accounts** tab — discover profiles from `.claude/account.json`, log in by name or with an ephemeral identity, view login/logout history; persists into `AccountRuntime` state |
+| 🆕 | **GUI Provider Profiles** | Local supplier-profile metadata from `.claude/account.json`; activation history is separate from Harness user authentication |
 | 🆕 | **GUI Remote Profiles** | New **Remote** tab — discover remote/SSH/teleport/direct-connect/deep-link profiles from `.claw-remote.json` etc., connect by name or ephemeral target, view connect/disconnect history |
 | 🆕 | **GUI MCP Servers** | New **MCP** tab — list discovered servers/resources/tools from `.claw-mcp.json`/`.mcp.json`, read inline + stdio resources, call tools with custom JSON args; "Probe stdio servers" toggle controls subprocess cost |
 | 🆕 | **GUI Plugins View** | New **Plugins** tab — list manifests from `.claw-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `plugins/*/plugin.json` with their tools, virtual tools, aliases, blocks, and lifecycle hooks |
@@ -538,6 +538,7 @@ python3 -m src.main agent \
 | `agent-chat [prompt]` | Start interactive multi-turn chat mode |
 | `sessions [--limit N]` | List the logged-in user's saved chats (default: 20), with IDs, Beijing update times and first-query previews |
 | `session-info <session_id>` | Show the logged-in user's saved session ID, message count and input/output tokens; does not resume chat |
+| `usage [--details] [--json]` | Show the authenticated user’s lifetime token totals, independent of saved conversations |
 | `session-delete <session_id> [--yes]` | Permanently delete one current-user session; confirm by default; refuse running sessions |
 | `sessions-clear [--yes]` | Permanently delete a confirmed snapshot of current-user session JSON files; skip running sessions |
 | `agent-bg <prompt>` | Run the agent in a local background session |
@@ -555,6 +556,94 @@ python3 -m src.main agent \
 | `agents-update <agent_type>` | Update an existing project or user agent definition |
 | `agents-delete <agent_type>` | Delete an existing project or user agent definition |
 | `agent-resume <id> <prompt>` | Resume a saved session |
+
+### 新对话、清除运行状态、删除历史
+
+| 操作 | GUI / API / CLI | 作用 |
+| --- | --- | --- |
+| 新对话 | GUI「新对话」；`POST /api/chat` 或 `/api/chat/stream` 不传 `resume_session_id` | 打开空白对话；首条普通消息创建新 Session，不携带旧对话内容。按钮本身不调用服务端、不创建空文件。 |
+| 清除运行状态 | GUI「清除运行状态」；`POST /api/clear`；对话命令 `/clear` | 重置当前用户进程内的会话引用、会话用量缓存、插件会话状态和临时环境变量，退出当前对话。保存的历史仍可重新打开。不是删除历史，也不是重置历史总用量。 |
+| 删除历史 | GUI「删除历史／删除全部历史」；现有 `DELETE /api/sessions/{session_id}` / `DELETE /api/sessions`；CLI `session-delete` / `sessions-clear` | 经确认后永久删除保存的会话，运行中的会话跳过或拒绝删除。 |
+
+三种操作都保留独立 Token 账本、上传文件和业务任务记录，不会取消已提交的业务任务。
+GUI 生成回复期间禁止新建／切换对话和清除状态；其他标签页在同一用户回复期间调用 `/api/clear` 会立即得到 409。
+`/clear` 的聊天结果使用 `stop_reason: "state_cleared"` 和 `session_id: null`，客户端必须退出旧 Session；
+`POST /api/clear` 保留原状态快照格式，并增加 `action: "runtime_state_cleared"`。
+
+### Harness 用户认证与本地供应商配置
+
+`/api/auth/login`、`/api/auth/me`、`/api/auth/logout` 以及 CLI `login/logout/whoami` 是 Harness 用户认证入口，
+负责密码校验、登录令牌和用户隔离。
+
+`AccountRuntime`、`/api/account/*` 和 CLI `account-*` 是独立的本地供应商配置档案功能，仍被内部命令、工具和状态报告使用。
+它只记录选中的配置／身份标签，不验证凭据，也不会替换实际模型连接配置；旧字段 `logged_in` 表示配置启用，不能用于鉴权。
+因此保留底层功能及兼容路径，GUI 改名为「供应商配置」，使用「启用／停用」文案；普通用户权限列表仍默认禁用它。
+启用或停用供应商配置不改变 Harness 用户的登录状态。
+
+### 用户历史 Token 用量
+
+登录后可查询当前用户所有 session 的持久化 Token 总量，包括之后删除的对话：
+
+```bash
+claw-code-agent usage --workspace-root /path/to/AGENT_WORKSPACE
+claw-code-agent usage --workspace-root /path/to/AGENT_WORKSPACE --json
+claw-code-agent usage --workspace-root /path/to/AGENT_WORKSPACE --details --status unresolved --limit 20 --offset 0
+claw-code-agent usage --workspace-root /path/to/AGENT_WORKSPACE --details --session-id SESSION_ID --json
+```
+
+GUI 登录后，侧栏的 **Token 用量** 显示相同数据；登录、完成聊天后自动刷新，也可点击“刷新用量”。点击“查看明细”可按状态和 Session ID 筛选、翻页；打开明细时每 15 秒刷新一次。
+`GET /api/usage` 使用现有 Cookie/Bearer 认证，只返回当前用户的数据，不能通过 `user_id` 参数切换用户。
+
+- `total_tokens`：已记录的历史总量，等于 input + output + cache read + cache creation。
+- `input_tokens`：未命中缓存的输入量；标准 OpenAI `prompt_tokens_details.cached_tokens` 从输入总量中拆出，避免重复计数。
+- `output_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`：输出、缓存读取和缓存写入量。
+- `reasoning_tokens`：输出的细分信息，不再次加入总量。
+- `request_count`：上线后记录的模型请求数，包含失败和用量未知的请求。
+- `active_requests`：有近期活动记录的进行中请求数。
+- `unresolved_requests`：完整用量待核实的请求数；明细提供原因，已收到的部分用量仍保留。
+- `pending_requests`：兼容旧客户端，等于 `active_requests + unresolved_requests`；大于零时总量可能不完整。
+- `imported_tokens`：从旧 session 累计快照补录的量；不是逐次请求明细，不能用于还原历史发生日期。
+- `history_import_skipped`：损坏、不安全或暂时忙碌而未补录的旧 session 数，下次查询会重试。
+
+账本位于现有 `HARNESS_AUTH_DIR` 下的 `usage.sqlite3`；未指定该变量时，与 `auth.sqlite3` 一样使用
+`AGENT_WORKSPACE` 旁边的 `.<workspace-name>-auth` 目录。无需部署数据库服务。请将此目录纳入持久化存储和备份，
+不要将账本放入用户工作区，也不要随会话清理。账本不记录提示词、回答或 API key，不计算金额。
+
+CLI/GUI 的认证模型调用按请求记录，包含工具循环、压缩及重试。请求发出前写入 pending 记录，收到 usage 后保存；
+数据库不可用时不会发出新的模型请求。重复的流式 usage 快照及重复结算不累计两次。
+普通聊天响应的 `usage` 仍为 session 累计量，新增 `run_usage` 表示本次执行增量；用户历史总量以 `/api/usage` 为准。
+
+旧 session 在首次查询、登录用户开始执行或删除会话前自动补录；每个用户/session 只建立一次历史基线，
+新会话也会建立空基线，避免后续重复导入新调用。升级时应先停止旧版服务及后台 worker，再启动新版。
+升级前已经删除或被旧累计 bug 覆盖的数据无法恢复；供应商未返回的 usage 也不能精确推算，应对账后处理。
+仅直接构造未配置 `usage_ledger` 的程序化 `LocalCodingAgent` 不会自动创建用户账本。
+
+`GET /api/usage/requests?limit=20&offset=0&status=unresolved&session_id=SESSION_ID`
+返回 `{items, total, limit, offset, has_more}`；筛选项均可省略，`limit` 范围 1–100，`offset` 非负。
+每条记录包含 request/session/run ID、模型、用途、时间、Token 分项、`total_tokens`、`status`、`reason` 和 `reason_message`。
+该接口和 CLI 只查询当前登录用户，独立于会话是否已删除；不会返回对话正文。
+`status` 为 `in_progress`（进行中）、`confirmed`（供应商用量已确认）、`unresolved`（待核实），不代表业务任务成功与否。
+调用期间每 10 秒更新活动记录；超过 90 秒未更新仅表示状态未知，不断言调用失败，也不会自动重试。
+旧版本未完成记录标为待核实，并说明缺少活动或原因信息；旧会话累计补录单独标注，无法拆解为原始请求。
+
+### 普通用户能力清单与错误契约
+
+`src/user_access.py` 的 `USER_AVAILABLE` 和 `USER_UNAVAILABLE` 是普通用户的两组能力配置。
+条目包含 HTTP 的方法与路由模板、对话斜杠命令的主名称、内置技能名称、模型工具名称。
+将已有条目移到另一集合并重启服务，即可更新展示与执行权限；别名继承主命令权限，未分类条目默认禁止。
+新增功能仍需实现和注册，完整性测试会检查新路由、命令、技能和工具是否已分类。
+本机管理员的账号创建、迁移及开发诊断 CLI 保留原有入口；这里控制面向认证用户的 API、对话命令和工具。
+
+`GET /api/capabilities` 只返回当前允许的能力。GUI 导航、按钮、命令面板及技能列表根据它显示；
+后台也执行权限检查。默认用户仅看到可用命令（`/help`、`/clear`、`/compact` 及别名），被禁用的技能不展示。
+HTTP 的读取和修改权限分别配置。允许接口不会扩大用户文件目录、工具运行时或其他底层资源权限。
+
+HTTP 与 NDJSON 流错误使用相同字段：`code`（稳定错误码）、`message`（展示信息）、`status`（对应 HTTP 状态）。
+HTTP 返回相应非 2xx 状态；流已开始后发送 `type: "error"` 事件，使用事件内的 `status`。
+保留字符串 `error`、`detail` 和 `error_type` 兼容旧客户端，聊天错误按可用情况保留 `session_id`。
+参数错误额外返回 `fields`（字段路径与错误类型），不回显输入值；未预期异常不直接返回内部异常正文。
+前端统一读取错误，401 回到登录页，模型失败不会显示为成功回答，网络中断不会自动重复提交。
+
 
 ### Runtime Utility Commands
 

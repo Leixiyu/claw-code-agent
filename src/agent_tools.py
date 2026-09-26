@@ -3535,7 +3535,7 @@ def _task_stop(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
         )
 
     # Cancel the task via the runtime
-    mutation = runtime.cancel_task(task_id, reason='Stopped by TaskStop tool')
+    runtime.cancel_task(task_id, reason='Stopped by TaskStop tool')
     description = getattr(task, 'title', '') or getattr(task, 'description', '') or task_id
     return (
         f'Successfully stopped task: {task_id} ({description})',

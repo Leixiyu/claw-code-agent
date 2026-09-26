@@ -1,0 +1,47 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+test('server capabilities control static and newly rendered controls, including combined requirements', () => {
+  const read = {dataset:{api:'GET /api/tasks'}};
+  const write = {dataset:{api:'POST /api/tasks'}};
+  const remove = {dataset:{api:'DELETE /api/sessions|POST /api/sessions/clear-preview'}};
+  const skill = {dataset:{api:'GET /api/skills'}};
+  const controls = [read,write,remove,skill];
+  const window = {harnessCapabilities:{http:['GET /api/tasks','DELETE /api/sessions','GET /api/skills'],skills:[]}};
+  const context = {window,document:{querySelectorAll:selector=>selector==='[data-api]' ? controls : [skill]}};
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/gui/static/auth.js'),'utf8'),context);
+  window.harnessApplyVisibility();
+  assert.equal(read.hidden,false);
+  assert.equal(write.hidden,true);
+  assert.equal(remove.hidden,true);
+  assert.equal(skill.hidden,true);
+  const dynamic = {dataset:{api:'DELETE /api/sessions/{session_id}'}};
+  controls.push(dynamic);
+  window.harnessCapabilities.http.push('POST /api/tasks','POST /api/sessions/clear-preview');
+  window.harnessCapabilities.skills.push('debug');
+  window.harnessApplyVisibility();
+  assert.equal(write.hidden,false);
+  assert.equal(remove.hidden,false);
+  assert.equal(skill.hidden,false);
+  assert.equal(dynamic.hidden,true);
+});
+
+test('view changes show only the selected allowed surface without duplicate CSS routing', () => {
+  const source = fs.readFileSync(path.join(__dirname,'../src/gui/static/app.js'),'utf8');
+  const tabs = ['chat','tasks','diag'].map(view => ({dataset:{view},hidden:view==='diag',classList:{toggle(){}}}));
+  const surfaces = ['chat','chat','tasks','diag'].map(view => ({dataset:{viewName:view},hidden:false}));
+  let tasksLoaded=0;
+  const context = {els:{viewTabs:tabs},document:{querySelectorAll:()=>surfaces},loadTasks(){tasksLoaded++;}};
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('function setView('),source.indexOf('// Diagnostics view')),context);
+  context.setView('tasks');
+  assert.deepEqual(surfaces.map(el=>el.hidden),[true,true,false,true]);
+  assert.equal(tasksLoaded,1);
+  context.setView('diag');
+  assert.deepEqual(surfaces.map(el=>el.hidden),[true,true,false,true]);
+  context.setView('chat');
+  assert.deepEqual(surfaces.map(el=>el.hidden),[false,false,true,true]);
+});

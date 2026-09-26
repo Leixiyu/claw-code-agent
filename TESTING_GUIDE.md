@@ -2034,7 +2034,7 @@ Run offline tests without hitting real services:
 python3 -m unittest tests.test_gui_health_api -v
 ```
 
-Coverage: public/internal `GET /health`, no login needed (other user APIs remain protected),
+Coverage: a single public `GET /health` (internal apps return 404), no login needed (other user APIs remain protected),
 parallel probes, 5-second wall-clock timeout, blank/invalid configuration, non-2xx responses,
 backend-declared failure, malformed/oversized response bodies, no redirects, and no credential forwarding.
 Tests use HTTPX MockTransport and temporary auth directories; they never make paid model calls.

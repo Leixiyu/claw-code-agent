@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from dataclasses import dataclass, field, replace
 from .agent_types import UsageStats
 from typing import TYPE_CHECKING, Any, Callable
@@ -24,6 +25,7 @@ class SlashCommandResult:
     output: str = ''
     transcript: tuple[dict[str, Any], ...] = ()
     session_mutated: bool = False
+    state_cleared: bool = False
     usage: UsageStats = field(default_factory=UsageStats)
 
 
@@ -87,6 +89,14 @@ def preprocess_slash_command(
     )
     spec = find_slash_command(normalized_name)
     if spec is None:
+        from .bundled_skills import find_bundled_skill
+        from .user_access import user_can_command
+        skill = find_bundled_skill(normalized_name)
+        if skill is not None and skill.user_invocable and (
+            not agent.authenticated_user_id or user_can_command(normalized_name)
+        ):
+            return SlashCommandResult(handled=True, should_query=True,
+                                      prompt=skill.get_prompt(agent, parsed.args.strip()))
         if looks_like_command(parsed.command_name):
             label = normalized_name if parsed.is_mcp else parsed.command_name
             return _local_result(input_text, f'Unknown skill: {label}')
@@ -309,7 +319,7 @@ def get_slash_command_specs() -> tuple[SlashCommandSpec, ...]:
         ),
         SlashCommandSpec(
             names=('clear',),
-            description='Clear ephemeral Python runtime state for this process.',
+            description='清除当前运行状态并退出当前对话；保留已保存历史和 Token 账本。',
             handler=_handle_clear,
         ),
         SlashCommandSpec(
@@ -564,12 +574,17 @@ def find_slash_command(command_name: str) -> SlashCommandSpec | None:
 
 
 def _handle_help(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:
+    from .user_access import user_commands, user_skills
     lines = ['# Slash Commands', '']
-    for spec in get_slash_command_specs():
+    specs = user_commands() if agent.authenticated_user_id else get_slash_command_specs()
+    for spec in specs:
         primary = f'/{spec.names[0]}'
         aliases = ', '.join(f'/{name}' for name in spec.names[1:])
         label = f'{primary} ({aliases})' if aliases else primary
         lines.append(f'- `{label}`: {spec.description}')
+    if agent.authenticated_user_id:
+        for skill in user_skills():
+            lines.append(f'- `/{skill.name}`: {skill.description}')
     lines.extend(
         [
             '',
@@ -1069,7 +1084,9 @@ def _handle_clear(agent: 'LocalCodingAgent', _args: str, input_text: str) -> Sla
     agent.clear_runtime_state()
     return _local_result(
         input_text,
-        'Cleared ephemeral Python agent state for this process.',
+        'Cleared ephemeral Python agent state for this process. '
+        '已退出当前对话；保存的历史、上传文件、业务任务和 Token 账本均保留。',
+        state_cleared=True,
     )
 
 
@@ -1080,7 +1097,8 @@ def _handle_compact(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sl
     result = compact_conversation(agent, custom_instructions)
 
     if result.error:
-        return _local_result(input_text, f'Compact failed: {result.error}')
+        return replace(_local_result(input_text, f'Compact failed: {result.error}'),
+                       session_mutated=bool(result.usage.total_tokens), usage=result.usage)
 
     lines = ['Conversation compacted.']
     if result.pre_compact_token_count:
@@ -1412,7 +1430,7 @@ def _handle_effort(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
         level = current or env_override or 'auto'
         msg = f'Current effort level: {level}'
         if env_override:
-            msg += f' (from CLAUDE_CODE_EFFORT_LEVEL env var)'
+            msg += ' (from CLAUDE_CODE_EFFORT_LEVEL env var)'
         return _local_result(input_text, msg)
 
     level = args.strip().lower()
@@ -1436,10 +1454,8 @@ def _handle_effort(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
 
 def _handle_doctor(agent: 'LocalCodingAgent', _args: str, input_text: str) -> SlashCommandResult:
     """Diagnose and verify the claw-code installation."""
-    import os
     import shutil
     import sys
-    from pathlib import Path as _Path
 
     checks: list[str] = []
 
@@ -1675,7 +1691,9 @@ def _handle_skills(agent: 'LocalCodingAgent', _args: str, input_text: str) -> Sl
     from .bundled_skills import get_bundled_skills
 
     lines = ['## Available Skills', '']
-    for skill in get_bundled_skills():
+    from .user_access import user_skills
+    skills = user_skills() if agent.authenticated_user_id else get_bundled_skills()
+    for skill in skills:
         if not skill.user_invocable:
             continue
         header = f'- `{skill.name}`'
@@ -1796,7 +1814,6 @@ def _open_or_link(url: str, *, opening_message: str, fallback_message: str) -> s
 
 
 def _changelog_path(agent: 'LocalCodingAgent') -> 'Path':
-    from pathlib import Path
 
     cwd = Path(agent.runtime_config.cwd)
     for candidate in (cwd / 'CHANGELOG.md', cwd / 'docs' / 'CHANGELOG.md'):
@@ -2031,7 +2048,6 @@ def _handle_reload_plugins(
     _args: str,
     input_text: str,
 ) -> SlashCommandResult:
-    from pathlib import Path
     from .plugin_runtime import PluginRuntime
 
     runtime = PluginRuntime.from_workspace(Path(agent.runtime_config.cwd))
@@ -2200,7 +2216,6 @@ def _handle_keybindings(
     _args: str,
     input_text: str,
 ) -> SlashCommandResult:
-    from pathlib import Path
 
     cwd = Path(agent.runtime_config.cwd)
     path = cwd / '.claude' / 'keybindings.json'
@@ -2238,7 +2253,7 @@ def _handle_btw(
 
 def _read_package_version() -> str:
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        from importlib.metadata import version
 
         return version('claw-code-agent')
     except Exception:
@@ -2584,7 +2599,7 @@ def _prompt_result(input_text: str, prompt: str) -> SlashCommandResult:
     )
 
 
-def _local_result(input_text: str, output: str) -> SlashCommandResult:
+def _local_result(input_text: str, output: str, *, state_cleared: bool = False) -> SlashCommandResult:
     transcript = (
         {'role': 'user', 'content': input_text},
         {'role': 'assistant', 'content': output},
@@ -2594,4 +2609,5 @@ def _local_result(input_text: str, output: str) -> SlashCommandResult:
         should_query=False,
         output=output,
         transcript=transcript,
+        state_cleared=state_cleared,
     )

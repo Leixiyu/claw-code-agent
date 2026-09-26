@@ -27,9 +27,9 @@ from __future__ import annotations
 import os
 import platform
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Callable
+from typing import Callable
 
 # ---------------------------------------------------------------------------
 # Product metadata  (product.ts)

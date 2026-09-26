@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable
 
 MAX_RELEASE_NOTES_SHOWN = 5
 

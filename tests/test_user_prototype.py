@@ -327,3 +327,30 @@ class UserPrototypeTests(unittest.TestCase):
         (self.wa / 'sessions' / 's1.json').write_text('{}')
         with self.assertRaisesRegex(ValueError, 'conflict'):
             migrate_user_data(legacy, self.root, self.a['user_id'], apply=True)
+
+class PublicAssetsTests(unittest.TestCase):
+    def test_static_requests_do_not_construct_user_api_apps(self):
+        from src.gui.server import create_user_app
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / 'workspace'
+            root.mkdir()
+            store = AuthStore(root)
+            store.create_user('alice', 'test-password')
+            token = store.login('alice', 'test-password')['access_token']
+            state = AgentState(cwd=root, model='test', base_url='http://unused.invalid', api_key='fixture',
+                               allow_shell=False, allow_write=False, session_directory=root/'sessions')
+            with patch('src.gui.server.create_user_app', wraps=create_user_app) as build_user_app:
+                app = create_app(state, auth_store=store)
+                with TestClient(app) as client:
+                    self.assertEqual(build_user_app.call_count, 0)
+                    self.assertEqual(client.get('/').status_code, 200)
+                    self.assertEqual(client.get('/static/app.js').status_code, 200)
+                    self.assertEqual(client.get('/unknown').json()['code'], 'not_found')
+                    self.assertEqual(client.get('/api/state').status_code, 401)
+                    self.assertEqual(build_user_app.call_count, 0)
+                    headers = {'Authorization':'Bearer '+token}
+                    self.assertEqual(client.get('/api/state', headers=headers).status_code, 200)
+                    self.assertEqual(build_user_app.call_count, 1)
+                    self.assertEqual(client.get('/static/app.css').status_code, 200)
+                    self.assertEqual(client.get('/api/state', headers=headers).status_code, 200)
+                    self.assertEqual(build_user_app.call_count, 1)

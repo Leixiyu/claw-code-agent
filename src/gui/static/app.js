@@ -46,7 +46,6 @@ const els = {
   paletteList: $("#palette-list"),
   paletteClose: $("#palette-close"),
   pasteChips: $("#paste-chips"),
-  tasksView: $("#tasks-view"),
   tasksCreate: $("#tasks-create"),
   tasksList: $("#tasks-list"),
   tasksCounts: $("#tasks-counts"),
@@ -140,9 +139,9 @@ const els = {
 
 const DiagState = { current: null };
 
-const BgState = { current: null, status: null };
+const BgState = { current: null };
 
-const MemoryState = { current: null, writable: false, dirty: false };
+const MemoryState = { current: null, writable: false };
 
 const PLAN_STATUSES = ["pending", "in_progress", "completed", "blocked", "cancelled"];
 
@@ -150,22 +149,14 @@ const PLAN_STATUSES = ["pending", "in_progress", "completed", "blocked", "cancel
 // API helpers
 // ---------------------------------------------------------------------------
 async function apiGet(path) {
-  const r = await fetch(path);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-  return r.json();
+  return window.harnessReadResponse(await window.harnessFetch(path));
 }
 
 async function apiPost(path, body) {
-  const r = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+  return window.harnessReadResponse(await window.harnessFetch(path, {
+    method: "POST", headers: { "Content-Type": "application/json" },
     body: body == null ? "{}" : JSON.stringify(body),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok && !data.error) {
-    throw new Error(data.detail || `${r.status} ${r.statusText}`);
-  }
-  return data;
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +245,8 @@ function setBusy(busy) {
   State.isBusy = busy;
   els.sendBtn.disabled = busy;
   els.input.disabled = busy;
+  els.newSessionBtn.disabled = busy;
+  els.clearBtn.disabled = busy;
   if (busy) setStatus("busy", "Working…");
   else setStatus("ready", "Ready");
 }
@@ -483,9 +476,8 @@ async function saveSettings(ev) {
 // ---------------------------------------------------------------------------
 async function loadSessions() {
   try {
-    const response = await fetch("/api/sessions");
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    const sessions = await response.json();
+    const response = await window.harnessFetch("/api/sessions");
+    const sessions = await window.harnessReadResponse(response);
     State.sessions = sessions;
     const skipped = Number(response.headers.get("X-Session-Skipped") || 0);
     $("#session-list-info").textContent = `共 ${sessions.length} 个会话` +
@@ -508,7 +500,7 @@ function renderSessions() {
     if (s.session_id === State.activeSessionId) item.classList.add("active");
     const preview = s.preview || "无原始会话预览";
     item.innerHTML = `
-      <button type="button" class="session-open" title="${escapeHtml(preview)}">
+      <button type="button" class="session-open" data-api="GET /api/sessions/{session_id}" title="${escapeHtml(preview)}">
         <span class="session-preview">${escapeHtml(preview)}</span>
       </button>
       <div class="session-meta">${escapeHtml(s.modified_at_display || "")} 北京时间</div>
@@ -516,7 +508,7 @@ function renderSessions() {
       <input class="session-id" readonly aria-label="Session ID" value="${escapeHtml(s.session_id)}" />
       <div class="session-actions">
         <button type="button" class="session-copy btn-ghost">复制 ID</button>
-        <button type="button" class="session-delete btn-ghost">删除</button>
+        <button type="button" class="session-delete btn-ghost" data-api="DELETE /api/sessions/{session_id}" title="永久删除这条历史对话，保留 Token 账本">删除历史</button>
       </div>
     `;
     item.querySelector(".session-open").addEventListener("click", () => openSession(s.session_id));
@@ -543,13 +535,13 @@ async function deleteSession(session) {
     setStatus("busy", "请等待当前回复完成后再删除会话。");
     return;
   }
-  if (!window.confirm(`永久删除会话？此操作无法恢复。\n${session.preview || "无原始会话预览"}\nID: ${session.session_id}\n仅删除会话 JSON，不删除上传视频或业务任务。`)) return;
+  if (!window.confirm(`永久删除会话？此操作无法恢复。\n${session.preview || "无原始会话预览"}\nID: ${session.session_id}\n仅删除历史对话；Token 账本、上传视频和业务任务均保留。`)) return;
   await performSessionDeletion(`/api/sessions/${encodeURIComponent(session.session_id)}?confirm=true`);
 }
 
 async function clearSessions() {
   if (State.isBusy) {
-    setStatus("busy", "请等待当前回复完成后再清空会话。");
+    setStatus("busy", "请等待当前回复完成后再删除历史。");
     return;
   }
   try {
@@ -559,10 +551,10 @@ async function clearSessions() {
       setStatus("ready", "没有可删除的会话。");
       return;
     }
-    if (!window.confirm(`永久删除当前用户的 ${preview.session_ids.length} 个会话？此操作无法恢复。\n运行中的会话会被跳过。上传视频、业务任务索引和 scratchpad 不会删除。`)) return;
+    if (!window.confirm(`永久删除当前用户的 ${preview.session_ids.length} 个会话？此操作无法恢复。\n运行中的会话会被跳过。Token 账本、上传视频、业务任务和 scratchpad 均保留。`)) return;
     await performSessionDeletion("/api/sessions", { session_ids: preview.session_ids, confirm: true });
   } catch (e) {
-    setStatus("error", `清空失败：${e.message}`);
+    setStatus("error", `删除历史失败：${e.message}`);
   }
 }
 
@@ -570,14 +562,13 @@ async function performSessionDeletion(url, body) {
   setBusy(true);
   let finalStatus;
   try {
-    const response = await fetch(url, {
+    const response = await window.harnessFetch(url, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    const report = await response.json();
-    if (!response.ok) throw new Error(report.detail || `HTTP ${response.status}`);
-    if (report.deleted.includes(State.activeSessionId)) newSession();
+    const report = await window.harnessReadResponse(response);
+    if (report.deleted.includes(State.activeSessionId)) resetConversationView();
     await loadSessions();
     const busy = report.skipped_running?.length || 0;
     const errors = report.errors?.length || 0;
@@ -590,13 +581,20 @@ async function performSessionDeletion(url, body) {
     finalStatus = ["error", `删除失败：${e.message}`];
   } finally {
     setBusy(false);
+    window.refreshHarnessUsage?.();
     if (finalStatus) setStatus(...finalStatus);
   }
 }
 
 async function openSession(sessionId) {
+  if (State.isBusy) {
+    setStatus("busy", "请等待当前操作完成后再切换对话。");
+    return;
+  }
+  setBusy(true);
+  let finalStatus;
   try {
-    setStatus("busy", "Loading session…");
+    setStatus("busy", "正在打开历史对话…");
     const session = await apiGet(`/api/sessions/${encodeURIComponent(sessionId)}`);
     State.activeSessionId = sessionId;
     clearChat();
@@ -604,19 +602,66 @@ async function openSession(sessionId) {
       renderTranscriptEntry(msg);
     }
     renderSessions();
-    setStatus("ready", `Session ${sessionId.slice(0, 8)}…`);
+    finalStatus = ["ready", `历史对话 ${sessionId.slice(0, 8)}…`];
   } catch (e) {
-    setStatus("error", `session: ${e.message}`);
+    finalStatus = ["error", `session: ${e.message}`];
+  } finally {
+    setBusy(false);
+    setStatus(...finalStatus);
   }
 }
 
-function newSession() {
+// Browser-only reset, also used after a confirmed deletion or server reset.
+function resetConversationView() {
   State.activeSessionId = null;
   clearChat();
   clearPasteStash();
+  els.input.value = "";
+  els.usageMeta.textContent = "";
+  autoSizeInput();
   renderSessions();
-  setStatus("ready", "New chat");
+}
+
+function newSession() {
+  if (State.isBusy) {
+    setStatus("busy", "请等待当前操作完成后再新建对话。");
+    return;
+  }
+  resetConversationView();
+  setStatus("ready", "已开始新对话；历史记录和 Token 用量保留。发送首条消息后创建新会话。");
   els.input.focus();
+}
+
+async function clearRuntimeState() {
+  if (State.isBusy) {
+    setStatus("busy", "请等待当前操作完成后再清除状态。");
+    return;
+  }
+  setBusy(true);
+  let finalStatus;
+  try {
+    await apiPost("/api/clear", {});
+    resetConversationView();
+    finalStatus = ["ready", "运行状态已清除，已退出当前对话；历史记录和 Token 账本保留。"];
+  } catch (e) {
+    finalStatus = ["error", e.message];
+  } finally {
+    setBusy(false);
+    setStatus(...finalStatus);
+    window.refreshHarnessUsage?.();
+    els.input.focus();
+  }
+}
+
+function applyConversationResult(data) {
+  if (data.stop_reason === "state_cleared") {
+    resetConversationView();
+    return;
+  }
+  // A null ID is intentional (e.g. /clear), not a missing update.
+  if (Object.prototype.hasOwnProperty.call(data, "session_id")) {
+    State.activeSessionId = data.session_id;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -808,21 +853,22 @@ function autoSizeInput() {
 }
 
 async function streamChat(payload, onProgress) {
-  const response = await fetch("/api/chat/stream", {
+  const response = await window.harnessFetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || error.error || `HTTP ${response.status}`);
+    await window.harnessReadResponse(response);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await reader.read().catch(() => {
+        throw window.harnessError({code: "connection_lost", message: "连接中断，已提交的任务可能仍在运行，请勿直接重复提交。"});
+      });
       buffer += decoder.decode(value, { stream: !done });
       const lines = buffer.split("\n");
       buffer = lines.pop();
@@ -831,10 +877,13 @@ async function streamChat(payload, onProgress) {
         if (!line.trim()) continue;
         const event = JSON.parse(line);
         if (event.type === "tool_start") onProgress(event);
-        if (event.type === "result") return event.data;
-        if (event.type === "error") return event;
+        if (event.type === "result") {
+          if (event.data?.error) throw window.harnessError(event.data);
+          return event.data;
+        }
+        if (event.type === "error") throw window.harnessError(event, event.status);
       }
-      if (done) throw new Error("连接已结束，但未收到最终回答。请查看会话后再决定是否重试。");
+      if (done) throw window.harnessError({code: "connection_lost", message: "连接已结束，但未收到最终回答。请查看会话后再决定是否重试。"});
     }
   } finally {
     await reader.cancel().catch(() => {});
@@ -866,27 +915,24 @@ async function send() {
       els.chat.scrollTop = els.chat.scrollHeight;
       setStatus("busy", event.message);
     });
-    if (data.error) {
-      appendMessage({ role: "error", content: `${data.error_type}: ${data.error}` });
-      setStatus("error", "Error");
-    } else {
-      // Render tool calls + final response from the transcript so the user
-      // sees what the agent actually did, not just the final reply.
-      renderRunResult(data);
-      State.activeSessionId = data.session_id || State.activeSessionId;
-      els.usageMeta.textContent =
-        `turns: ${data.turns}  ·  tools: ${data.tool_calls}` +
-        (data.usage?.total_tokens
-          ? `  ·  tokens: ${data.usage.total_tokens}`
-          : "");
-      clearPasteStash();
-      await loadSessions();
-    }
+    // Render tool calls + final response from the transcript so the user
+    // sees what the agent actually did, not just the final reply.
+    applyConversationResult(data);
+    renderRunResult(data);
+    els.usageMeta.textContent =
+      `turns: ${data.turns}  ·  tools: ${data.tool_calls}` +
+      (data.usage?.total_tokens
+        ? `  ·  tokens: ${data.usage.total_tokens}`
+        : "");
+    clearPasteStash();
+    await loadSessions();
   } catch (e) {
+    if (e.sessionId) State.activeSessionId = e.sessionId;
     appendMessage({ role: "error", content: e.message });
     setStatus("error", "Error");
   } finally {
     setBusy(false);
+    window.refreshHarnessUsage?.();
     els.input.focus();
   }
 }
@@ -981,17 +1027,20 @@ function renderTasks(payload) {
     actions.className = "task-actions";
     if (task.status === "pending") {
       const start = document.createElement("button");
+      start.dataset.api = "POST /api/tasks/{task_id}/start";
       start.textContent = "Start";
       start.addEventListener("click", () => taskAction(task.task_id, "start"));
       actions.appendChild(start);
     }
     if (task.status !== "completed" && task.status !== "cancelled") {
       const done = document.createElement("button");
+      done.dataset.api = "POST /api/tasks/{task_id}/complete";
       done.textContent = "Done";
       done.addEventListener("click", () => taskAction(task.task_id, "complete"));
       actions.appendChild(done);
 
       const cancel = document.createElement("button");
+      cancel.dataset.api = "POST /api/tasks/{task_id}/cancel";
       cancel.textContent = "Cancel";
       cancel.addEventListener("click", async () => {
         const reason = prompt("Cancel reason (optional)") || null;
@@ -1044,7 +1093,11 @@ async function createTask(ev) {
 }
 
 function setView(view) {
-  document.body.dataset.view = view;
+  const tab = Array.from(els.viewTabs).find(item => item.dataset.view === view);
+  if (!tab || tab.hidden) return;
+  document.querySelectorAll('[data-view-name]').forEach(surface => {
+    surface.hidden = surface.dataset.viewName !== view;
+  });
   for (const tab of els.viewTabs) {
     tab.classList.toggle("active", tab.dataset.view === view);
   }
@@ -1083,7 +1136,8 @@ async function loadDiagnosticsList() {
         <span class="memory-item-name">${escapeHtml(r.label)}</span>
         <span class="memory-item-path">${escapeHtml(r.name)}</span>
       `;
-      btn.addEventListener("click", () => loadDiagnostic(r.name));
+      btn.dataset.api = "GET /api/diagnostics/{name}";
+    btn.addEventListener("click", () => loadDiagnostic(r.name));
       els.diagList.appendChild(btn);
     }
   } catch (e) {
@@ -1098,17 +1152,14 @@ async function loadDiagnostic(name) {
   els.diagCurrent.textContent = `Rendering ${name}…`;
   els.diagContent.value = "";
   try {
-    const r = await fetch(`/api/diagnostics/${encodeURIComponent(name)}`);
-    const data = await r.json();
-    if (!r.ok) {
-      els.diagCurrent.textContent = `${name} (error)`;
-      els.diagContent.value = data.detail || `${r.status}`;
-      return;
-    }
+    const r = await window.harnessFetch(`/api/diagnostics/${encodeURIComponent(name)}`);
+    const data = await window.harnessReadResponse(r);
     els.diagCurrent.textContent = `${data.label} (${name})`;
     els.diagContent.value = data.content || "(empty)";
     await loadDiagnosticsList();
   } catch (e) {
+    els.diagCurrent.textContent = `${name} (error)`;
+    els.diagContent.value = e.message;
     setStatus("error", `diag: ${e.message}`);
   }
 }
@@ -1145,7 +1196,7 @@ function renderTeams(payload) {
           ${(team.members || []).map((m) => `<span class="skill-meta-pill">${escapeHtml(m)}</span>`).join("")}
         </div>
         <div class="skill-actions">
-          <button data-act="del">Delete</button>
+          <button data-api="DELETE /api/teams/{name}" data-act="del">Delete</button>
         </div>
       `;
       card.querySelector('[data-act="del"]').addEventListener("click", () => deleteTeam(team.name));
@@ -1201,12 +1252,8 @@ async function createTeam(ev) {
 async function deleteTeam(name) {
   if (!confirm(`Delete team ${name} and all its messages?`)) return;
   try {
-    const r = await fetch(`/api/teams/${encodeURIComponent(name)}`, { method: "DELETE" });
-    const data = await r.json();
-    if (!r.ok) {
-      setStatus("error", data.detail || `${r.status}`);
-      return;
-    }
+    const r = await window.harnessFetch(`/api/teams/${encodeURIComponent(name)}`, { method: "DELETE" });
+    const data = await window.harnessReadResponse(r);
     renderTeams(data);
   } catch (e) {
     setStatus("error", `teams: ${e.message}`);
@@ -1269,7 +1316,7 @@ function renderRemoteTriggers(payload) {
           <span class="skill-meta-pill">source: ${escapeHtml(t.source)}</span>
         </div>
         <div class="skill-actions">
-          <button data-act="run">Run…</button>
+          <button data-api="POST /api/remote-triggers/{trigger_id}/run" data-act="run">Run…</button>
         </div>
       `;
       card.querySelector('[data-act="run"]').addEventListener("click", () => runRemoteTrigger(t.trigger_id));
@@ -1380,7 +1427,7 @@ function renderSearchProviders(payload) {
         ${p.api_key_env ? `<span class="skill-meta-pill">env: ${escapeHtml(p.api_key_env)}</span>` : ""}
       </div>
       <div class="skill-actions">
-        <button data-act="activate">Activate</button>
+        <button data-api="POST /api/search/activate/{name}" data-act="activate">Activate</button>
       </div>
     `;
     card.querySelector('[data-act="activate"]').addEventListener("click", () => activateSearchProvider(p.name));
@@ -1458,7 +1505,7 @@ function renderWorkflows(payload) {
           <span class="skill-meta-pill">${w.steps.length} step${w.steps.length === 1 ? "" : "s"}</span>
         </div>
         <div class="skill-actions">
-          <button data-act="run">Run…</button>
+          <button data-api="POST /api/workflows/{name}/run" data-act="run">Run…</button>
         </div>
       `;
       card.querySelector('[data-act="run"]').addEventListener("click", () => runWorkflow(w.name));
@@ -1523,7 +1570,7 @@ function renderAsk(payload) {
         <span class="history-when">#${idx}</span>
         <span class="history-tool">${escapeHtml(entry.match)}</span>
         <span class="history-detail">Q: ${escapeHtml(entry.question || "(any)")}<br/>A: ${escapeHtml(entry.answer)}</span>
-        <span class="history-session"><button data-act="del">Remove</button></span>
+        <span class="history-session"><button data-api="DELETE /api/ask-user/queue/{index}" data-act="del">Remove</button></span>
       `;
       row.querySelector('[data-act="del"]').addEventListener("click", () => removeAskQueued(idx));
       els.askQueue.appendChild(row);
@@ -1580,12 +1627,8 @@ async function enqueueAsk(ev) {
 
 async function removeAskQueued(idx) {
   try {
-    const r = await fetch(`/api/ask-user/queue/${idx}`, { method: "DELETE" });
-    const data = await r.json();
-    if (!r.ok) {
-      setStatus("error", data.detail || `${r.status}`);
-      return;
-    }
+    const r = await window.harnessFetch(`/api/ask-user/queue/${idx}`, { method: "DELETE" });
+    const data = await window.harnessReadResponse(r);
     renderAsk(data);
   } catch (e) {
     setStatus("error", `ask: ${e.message}`);
@@ -1691,7 +1734,7 @@ function renderMcp(payload) {
         <span class="history-when">${escapeHtml(r.server_name || "")}</span>
         <span class="history-tool">${escapeHtml(r.uri)}</span>
         <span class="history-detail">${escapeHtml(r.description || r.name || "")}</span>
-        <span class="history-session"><button data-act="read">Read</button></span>
+        <span class="history-session"><button data-api="POST /api/mcp/resources/read" data-act="read">Read</button></span>
       `;
       row.querySelector('[data-act="read"]').addEventListener("click", () => readMcpResource(r.uri));
       els.mcpResources.appendChild(row);
@@ -1710,7 +1753,7 @@ function renderMcp(payload) {
         <span class="history-when">${escapeHtml(t.server_name || "")}</span>
         <span class="history-tool">${escapeHtml(t.name)}</span>
         <span class="history-detail">${escapeHtml(t.description || "")}</span>
-        <span class="history-session"><button data-act="call">Call…</button></span>
+        <span class="history-session"><button data-api="POST /api/mcp/tools/call" data-act="call">Call…</button></span>
       `;
       row.querySelector('[data-act="call"]').addEventListener("click", () => callMcpTool(t));
       els.mcpTools.appendChild(row);
@@ -1794,7 +1837,7 @@ function renderRemote(payload) {
           <span class="skill-meta-pill">target: ${escapeHtml(profile.target || "?")}</span>
         </div>
         <div class="skill-actions">
-          <button data-act="connect">Connect</button>
+          <button data-api="POST /api/remote/connect" data-act="connect">Connect</button>
         </div>
       `;
       card.querySelector('[data-act="connect"]').addEventListener("click", () =>
@@ -1876,7 +1919,7 @@ function renderAccount(payload) {
     if (value !== null && value !== undefined && value !== "")
       lines.push(`<span class="label">${label}</span><span class="value">${escapeHtml(String(value))}</span>`);
   };
-  push("logged_in", status.logged_in ? "yes" : "no");
+  push("配置已启用", status.logged_in ? "是" : "否");
   push("detail", status.detail);
   push("provider", status.provider);
   push("identity", status.identity);
@@ -1907,7 +1950,7 @@ function renderAccount(payload) {
           ${profile.api_base ? `<span class="skill-meta-pill">api: ${escapeHtml(profile.api_base)}</span>` : ""}
         </div>
         <div class="skill-actions">
-          <button data-act="login">Activate</button>
+          <button data-api="POST /api/account/login" data-act="login">Activate</button>
         </div>
       `;
       card.querySelector('[data-act="login"]').addEventListener("click", () =>
@@ -1920,7 +1963,7 @@ function renderAccount(payload) {
   // History.
   els.accountHistory.innerHTML = "";
   if (!payload.history.length) {
-    els.accountHistory.innerHTML = `<div class="empty-state">No login history yet.</div>`;
+    els.accountHistory.innerHTML = `<div class="empty-state">暂无配置启用记录。</div>`;
   } else {
     for (const entry of [...payload.history].reverse()) {
       const row = document.createElement("div");
@@ -1949,10 +1992,10 @@ async function loadAccount() {
 
 async function loginAccount(body) {
   try {
-    setStatus("busy", "Logging in…");
+    setStatus("busy", "正在启用供应商配置…");
     const data = await apiPost("/api/account/login", body);
     renderAccount(data);
-    setStatus("ready", "Logged in");
+    setStatus("ready", "供应商配置已启用；Harness 登录状态不受影响。");
   } catch (e) {
     setStatus("error", `account: ${e.message}`);
   }
@@ -1975,7 +2018,7 @@ async function logoutAccount() {
   try {
     const data = await apiPost("/api/account/logout", { reason: "manual_logout" });
     renderAccount(data);
-    setStatus("ready", "Logged out");
+    setStatus("ready", "供应商配置已停用；Harness 登录状态不受影响。");
   } catch (e) {
     setStatus("error", `account: ${e.message}`);
   }
@@ -2007,7 +2050,7 @@ async function loadSkillsView() {
           ${(skill.allowed_tools || []).map((t) => `<span class="skill-meta-pill">tool: ${escapeHtml(t)}</span>`).join("")}
         </div>
         <div class="skill-actions">
-          <button data-act="use">Use in chat</button>
+          <button data-api="POST /api/chat/stream" data-act="use">Use in chat</button>
           <button data-act="copy">Copy name</button>
         </div>
       `;
@@ -2145,6 +2188,7 @@ function renderBgList(payload) {
       <span class="memory-item-name">${escapeHtml(sess.background_id)} · ${escapeHtml(sess.status)}</span>
       <span class="memory-item-path">${escapeHtml((sess.prompt || "(no prompt)").slice(0, 80))}</span>
     `;
+    btn.dataset.api = "GET /api/background/{background_id}";
     btn.addEventListener("click", () => openBackground(sess.background_id));
     els.bgList.appendChild(btn);
   }
@@ -2162,7 +2206,6 @@ async function openBackground(id) {
   BgState.current = id;
   try {
     const detail = await apiGet(`/api/background/${encodeURIComponent(id)}`);
-    BgState.status = detail.status;
     els.bgCurrent.textContent = id;
     const bits = [`status ${detail.status}`, `pid ${detail.pid}`, `model ${detail.model}`];
     if (detail.exit_code != null) bits.push(`exit ${detail.exit_code}`);
@@ -2333,16 +2376,12 @@ async function savePlan() {
   try {
     setStatus("busy", "Saving plan…");
     // Plan replace is a PUT, so we go around the apiPost helper.
-    const r = await fetch("/api/plan", {
+    const r = await window.harnessFetch("/api/plan", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collectPlan()),
     });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      setStatus("error", data.detail || `${r.status} ${r.statusText}`);
-      return;
-    }
+    const data = await window.harnessReadResponse(r);
     renderPlan(data);
     setStatus("ready", "Plan saved");
     if (els.planSyncTasks.checked) await loadTasks();
@@ -2369,6 +2408,7 @@ function renderMemoryList(payload) {
       <span class="memory-item-name">${escapeHtml(entry.name)}${entry.writable ? "" : " (read-only)"}</span>
       <span class="memory-item-path">${escapeHtml(entry.path)}</span>
     `;
+    btn.dataset.api = "GET /api/memory/file";
     btn.addEventListener("click", () => openMemoryFile(entry.path));
     els.memoryList.appendChild(btn);
   }
@@ -2385,15 +2425,10 @@ async function loadMemory() {
 
 async function openMemoryFile(path) {
   try {
-    const r = await fetch(`/api/memory/file?path=${encodeURIComponent(path)}`);
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      setStatus("error", data.detail || `${r.status} ${r.statusText}`);
-      return;
-    }
+    const r = await window.harnessFetch(`/api/memory/file?path=${encodeURIComponent(path)}`);
+    const data = await window.harnessReadResponse(r);
     MemoryState.current = data.path;
     MemoryState.writable = !!data.writable;
-    MemoryState.dirty = false;
     els.memoryCurrent.textContent = data.path;
     els.memoryFlags.textContent = data.writable
       ? `${data.size} bytes`
@@ -2413,17 +2448,12 @@ async function saveMemory() {
   if (!MemoryState.current || !MemoryState.writable) return;
   try {
     setStatus("busy", "Saving memory…");
-    const r = await fetch("/api/memory/file", {
+    const r = await window.harnessFetch("/api/memory/file", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: MemoryState.current, content: els.memoryContent.value }),
     });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      setStatus("error", data.detail || `${r.status} ${r.statusText}`);
-      return;
-    }
-    MemoryState.dirty = false;
+    await window.harnessReadResponse(r);
     setStatus("ready", "Memory saved");
     await loadMemory();
   } catch (e) {
@@ -2435,15 +2465,11 @@ async function deleteMemory() {
   if (!MemoryState.current || !MemoryState.writable) return;
   if (!confirm(`Delete ${MemoryState.current}?`)) return;
   try {
-    const r = await fetch(
+    const r = await window.harnessFetch(
       `/api/memory/file?path=${encodeURIComponent(MemoryState.current)}`,
       { method: "DELETE" }
     );
-    if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      setStatus("error", data.detail || `${r.status} ${r.statusText}`);
-      return;
-    }
+    await window.harnessReadResponse(r);
     MemoryState.current = null;
     MemoryState.writable = false;
     els.memoryContent.value = "";
@@ -2467,16 +2493,12 @@ async function newMemoryFile() {
   const cwd = State.serverState?.cwd || "";
   const target = name.startsWith("/") || name.startsWith("~") ? name : `${cwd}/${name}`;
   try {
-    const r = await fetch("/api/memory/file", {
+    const r = await window.harnessFetch("/api/memory/file", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: target, content: "" }),
     });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      setStatus("error", data.detail || `${r.status} ${r.statusText}`);
-      return;
-    }
+    const data = await window.harnessReadResponse(r);
     await loadMemory();
     await openMemoryFile(data.path);
   } catch (e) {
@@ -2516,16 +2538,7 @@ function bind() {
   els.settingsForm.addEventListener("submit", saveSettings);
   els.slashBtn.addEventListener("click", () => openPalette("slash"));
   els.skillsBtn.addEventListener("click", () => openPalette("skills"));
-  els.clearBtn.addEventListener("click", async () => {
-    try {
-      setStatus("busy", "Clearing…");
-      await apiPost("/api/clear", {});
-      newSession();
-      setStatus("ready", "Cleared");
-    } catch (e) {
-      setStatus("error", e.message);
-    }
-  });
+  els.clearBtn.addEventListener("click", clearRuntimeState);
   els.paletteClose.addEventListener("click", closePalette);
   els.palette.addEventListener("click", (e) => {
     if (e.target === els.palette) closePalette();
@@ -2592,17 +2605,17 @@ function bind() {
 
 async function init() {
   await window.requireHarnessLogin();
+  window.initHarnessUsage();
   document.querySelector('#video-upload').onchange = async (event) => {
     const input = event.target;
     input.disabled = true;
     try {
       for (const file of input.files) {
         setStatus('busy', `正在上传 ${file.name}…`);
-        const response = await fetch('/api/uploads', {
+        const response = await window.harnessFetch('/api/uploads', {
           method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file,
         });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.detail || 'Upload failed');
+        const payload = await window.harnessReadResponse(response);
         els.input.value += `${els.input.value ? '\n' : ''}视频：${payload.video_ref.path}`;
         appendMessage({ role: 'progress', content: `已上传：${payload.video_ref.path}` });
       }
@@ -2611,13 +2624,15 @@ async function init() {
     finally { input.disabled = false; input.value = ''; }
   };
   bind();
-  setView("chat");
+  const firstTab = Array.from(els.viewTabs).find(tab => !tab.hidden);
+  if (firstTab) setView(firstTab.dataset.view);
   setStatus("ready", "Ready");
+  const can = api => window.harnessCapabilities.http.includes(api);
   await Promise.all([
-    loadServerState(),
-    loadSessions(),
-    loadSlashCommands(),
-    loadSkills(),
+    can('GET /api/state') && loadServerState(),
+    can('GET /api/sessions') && loadSessions(),
+    can('GET /api/slash-commands') && loadSlashCommands(),
+    can('GET /api/skills') && loadSkills(),
   ]);
   els.input.focus();
 }

@@ -10,6 +10,12 @@ from .auth_runtime import AuthStore, AuthenticationError
 from .user_workspace import atomic_json, initialize_user
 
 
+AUTH_COMMANDS = (
+    'users-create', 'login', 'logout', 'whoami', 'migrate-user-data',
+    'sessions', 'session-info', 'session-delete', 'sessions-clear', 'usage',
+)
+
+
 def _positive_limit(value):
     number = int(value)
     if number < 1:
@@ -18,7 +24,7 @@ def _positive_limit(value):
 
 
 def add_auth_commands(subparsers):
-    for name in ('users-create', 'login', 'logout', 'whoami', 'migrate-user-data', 'sessions', 'session-info', 'session-delete', 'sessions-clear'):
+    for name in AUTH_COMMANDS:
         help_text = ('Show a saved session summary for the logged-in user (does not resume chat)'
                      if name == 'session-info' else f'Prototype user management: {name}')
         parser = subparsers.add_parser(name, help=help_text)
@@ -27,6 +33,13 @@ def add_auth_commands(subparsers):
             parser.add_argument('session_id')
         if name in {'session-delete', 'sessions-clear'}:
             parser.add_argument('--yes', action='store_true', help='Confirm permanent deletion without prompting')
+        if name == 'usage':
+            parser.add_argument('--json', action='store_true', help='Print token usage as JSON')
+            parser.add_argument('--details', action='store_true', help='Show paginated model request usage')
+            parser.add_argument('--limit', type=_positive_limit, default=20)
+            parser.add_argument('--offset', type=int, default=0)
+            parser.add_argument('--session-id')
+            parser.add_argument('--status', choices=('in_progress', 'confirmed', 'unresolved'))
         if name == 'sessions':
             parser.add_argument('--limit', type=_positive_limit, default=20)
         if name in {'users-create', 'login', 'migrate-user-data'}:
@@ -63,10 +76,40 @@ def handle_auth_command(args):
         print('Logged out')
     elif args.command == 'whoami':
         print(json.dumps(store.authenticate(cli_token(store))))
+    elif args.command == 'usage':
+        user = store.authenticate(cli_token(store))
+        summary = store.usage_summary(user['user_id'])
+        if not args.details and (args.session_id or args.status or args.offset or args.limit != 20):
+            raise ValueError('Use --details with request filters or pagination.')
+        requests = None
+        if args.details:
+            requests = store.usage_ledger().requests(user['user_id'], limit=args.limit, offset=args.offset,
+                                                     session_id=args.session_id, status=args.status)
+        if args.json:
+            print(json.dumps({**summary, **({'requests': requests} if requests is not None else {})}, ensure_ascii=False, indent=2))
+        else:
+            print(f"当前用户：{user['username']}")
+            print(f"历史总 Token 用量（total_tokens）：{summary['total_tokens']:,}")
+            for key in ('input_tokens', 'output_tokens', 'cache_read_input_tokens',
+                        'cache_creation_input_tokens', 'reasoning_tokens'):
+                print(f"{key}={summary[key]}")
+            print(f"历史补录 Token：{summary['imported_tokens']:,}")
+            print(f"进行中：{summary['active_requests']}；待核实：{summary['unresolved_requests']}；未补录会话：{summary['history_import_skipped']}")
+            print('包括已删除对话；reasoning 已包含在 output 中，不重复计入总量。')
+            if requests is not None:
+                from datetime import datetime, timezone
+                labels = {'in_progress': '进行中', 'confirmed': '用量已确认', 'unresolved': '待核实'}
+                print(f"请求明细：共 {requests['total']} 条，从第 {requests['offset'] + 1} 条起")
+                for item in requests['items']:
+                    timestamp = datetime.fromtimestamp(item['created_at'], timezone.utc).isoformat()
+                    print(f"{timestamp} {item['request_id']} session={item['session_id']} model={item['model']} tokens={item['total_tokens']} {labels[item['status']]}")
+                    if item['reason_message']:
+                        print('  ' + item['reason_message'])
     elif args.command in {'session-delete', 'sessions-clear'}:
         from .session_lifecycle import (clear_saved_sessions, delete_saved_session,
                                         session_deletion_candidates, session_path)
         user = store.authenticate(cli_token(store))
+        store.usage_summary(user['user_id'])  # Preserve legacy totals before deletion.
         # Preserve the lexical path so lifecycle checks can detect a symlink
         # redirect to another user's directory, even inside the same root.
         directory = store.workspace / 'users' / user['user_id'] / 'sessions'
@@ -142,6 +185,8 @@ def prepare_user_args(args):
     token = cli_token(store)
     user = store.authenticate(token)
     workspace = initialize_user(root, user['user_id'])
+    args._usage_ledger = store.usage_ledger()
+    args._usage_ledger.import_sessions(user['user_id'], workspace / 'sessions')
     args._user_id = user['user_id']
     args._workspace_container = root
     args._auth_token = token

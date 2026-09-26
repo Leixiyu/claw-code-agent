@@ -434,7 +434,7 @@ def _call_compact_model(
     Returns (None, usage, error_string) on failure.
     """
     try:
-        turn = agent.client.complete(api_messages, tools=[])
+        turn = agent.metered_client('compact').complete(api_messages, tools=[])
     except Exception as exc:
         error_str = str(exc)
         if 'prompt' in error_str.lower() and 'long' in error_str.lower():

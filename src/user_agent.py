@@ -15,10 +15,8 @@ def user_runtime_config(config, workspace: Path):
 
 
 def user_tools():
-    names = {'list_dir', 'read_file', 'glob_search', 'grep_search', 'sleep'}
-    for module in ('video_analysis', 'video_processing', 'model_training'):
-        names.update({f'submit_{module}', f'get_{module}_status', f'get_{module}_result', f'list_{module}_tasks'})
-    return {name: tool for name, tool in default_tool_registry().items() if name in names}
+    from .user_access import user_can
+    return {name: tool for name, tool in default_tool_registry().items() if user_can('tool', name)}
 
 
 def user_prompt(root: Path, workspace: Path) -> str:

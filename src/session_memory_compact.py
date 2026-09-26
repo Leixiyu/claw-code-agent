@@ -12,10 +12,9 @@ the legacy API-based compact instead.
 from __future__ import annotations
 
 import os
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .agent_context_usage import estimate_tokens
 from .agent_session import AgentMessage
@@ -526,7 +525,6 @@ def extract_session_memory_from_messages(
     user_messages: list[str] = []
     tool_names_used: set[str] = set()
     file_paths: set[str] = set()
-    corrections: list[str] = []
 
     for msg in messages:
         if msg.role == 'user' and _has_text_content(msg):

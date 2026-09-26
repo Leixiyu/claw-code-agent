@@ -196,7 +196,7 @@ ReadWritePaths=/home/atis/Documents/RAY/agent_workspace /home/atis/Documents/RAY
 curl -sS --max-time 10 http://127.0.0.1:8765/health | python -m json.tool
 ```
 
-`GET /health` 无需登录，每次并发探测，单项最多 5 秒，不发送认证密钥、不调用聊天或业务执行接口。
+`GET /health` 仅在最外层应用注册一次，不在每个用户的内部应用重复注册；无需登录，每次并发探测，单项最多 5 秒，不发送认证密钥、不调用聊天或业务执行接口。
 返回 `status`、`checked_at`、`summary`（各状态数量）和 `services`（逐项状态、耗时及失败原因）。
 
 | 服务 | 探测方式 |

@@ -1,8 +1,9 @@
 """FastAPI router for the local account runtime.
 
-Wraps :class:`AccountRuntime` so the GUI can browse manifest-defined
-profiles, log in (named profile or ephemeral identity), check current
-status, and log out.  Reads & writes the same state file the CLI uses
+Wraps :class:`AccountRuntime` to inspect and activate local provider profile
+metadata. The legacy login/logout names do not authenticate a Harness user,
+validate provider credentials, or change the model client. User authentication
+belongs exclusively to /api/auth.  Reads & writes the same state file the CLI uses
 under ``<cwd>/.port_sessions/account_runtime.json``.
 """
 
