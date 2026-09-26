@@ -78,7 +78,17 @@ def save_agent_session(session: StoredAgentSession, directory: Path | None = Non
     target_dir = directory or DEFAULT_AGENT_SESSION_DIR
     with session_guard(target_dir, session.session_id):
         path = session_path(target_dir, session.session_id)
-        atomic_json(path, asdict(session))
+        payload = asdict(session)
+        # Display names belong to saved metadata, not a possibly stale Agent.
+        # A later turn/save must preserve a rename made through the GUI.
+        if path.exists():
+            try:
+                previous = json.loads(path.read_text(encoding='utf-8'))
+            except ValueError:
+                previous = {}
+            if isinstance(previous, dict) and isinstance(previous.get('name'), str):
+                payload['name'] = previous['name']
+        atomic_json(path, payload)
     return path
 
 

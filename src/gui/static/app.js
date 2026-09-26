@@ -36,7 +36,6 @@ const els = {
   settingsForm: $("#settings-form"),
   statusDot: $("#status-dot"),
   statusText: $("#status-text"),
-  cwdMeta: $("#cwd-meta"),
   usageMeta: $("#usage-meta"),
   slashBtn: $("#slash-btn"),
   skillsBtn: $("#skills-btn"),
@@ -383,7 +382,6 @@ function applyServerState(state) {
     f.disable_claude_md_discovery.checked = !!state.disable_claude_md_discovery;
   if (f.additional_working_directories)
     f.additional_working_directories.value = (state.additional_working_directories || []).join("\n");
-  els.cwdMeta.textContent = `cwd: ${state.cwd || "?"}`;
 }
 
 async function loadServerState() {
@@ -489,6 +487,7 @@ async function loadSessions() {
 }
 
 function renderSessions() {
+  closeSessionMenu();
   els.sessionList.innerHTML = "";
   if (!State.sessions.length) {
     els.sessionList.innerHTML = `<div class="empty-state">No saved sessions yet.</div>`;
@@ -498,35 +497,144 @@ function renderSessions() {
     const item = document.createElement("div");
     item.className = "session-item";
     if (s.session_id === State.activeSessionId) item.classList.add("active");
-    const preview = s.preview || "无原始会话预览";
+    const preview = s.name || s.preview || "未命名会话";
     item.innerHTML = `
       <button type="button" class="session-open" data-api="GET /api/sessions/{session_id}" title="${escapeHtml(preview)}">
         <span class="session-preview">${escapeHtml(preview)}</span>
       </button>
-      <div class="session-meta">${escapeHtml(s.modified_at_display || "")} 北京时间</div>
-      <div class="session-meta">${s.turns} turns · ${s.tool_calls} tools</div>
-      <input class="session-id" readonly aria-label="Session ID" value="${escapeHtml(s.session_id)}" />
-      <div class="session-actions">
-        <button type="button" class="session-copy btn-ghost">复制 ID</button>
-        <button type="button" class="session-delete btn-ghost" data-api="DELETE /api/sessions/{session_id}" title="永久删除这条历史对话，保留 Token 账本">删除历史</button>
-      </div>
+      <div class="session-meta">${escapeHtml(s.modified_at_display || "—")}</div>
+      <button type="button" class="session-menu-trigger" aria-label="会话操作" aria-haspopup="menu" title="会话操作（也可右键）">⋯</button>
     `;
     item.querySelector(".session-open").addEventListener("click", () => openSession(s.session_id));
-    item.querySelector(".session-delete").addEventListener("click", () => deleteSession(s));
-    item.querySelector(".session-id").addEventListener("click", (event) => event.target.select());
-    item.querySelector(".session-copy").addEventListener("click", async () => {
-      const input = item.querySelector(".session-id");
-      try {
-        await navigator.clipboard.writeText(s.session_id);
-        setStatus("ready", "Session ID 已复制");
-      } catch (_) {
-        // Clipboard API may be unavailable on a server accessed over HTTP.
-        input.focus();
-        input.select();
-        setStatus("ready", "请按 Ctrl+C / Cmd+C 复制已选中的完整 Session ID");
+    const trigger = item.querySelector(".session-menu-trigger");
+    item.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showSessionMenu(s, trigger, event.clientX, event.clientY);
+    });
+    item.addEventListener("keydown", (event) => {
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault();
+        showSessionMenu(s, trigger);
       }
     });
+    trigger.addEventListener("click", () => showSessionMenu(s, trigger));
     els.sessionList.appendChild(item);
+  }
+}
+
+let sessionMenuCleanup = null;
+
+function closeSessionMenu(restoreFocus = false) {
+  sessionMenuCleanup?.(restoreFocus);
+  sessionMenuCleanup = null;
+}
+
+function showSessionMenu(session, trigger, x, y) {
+  closeSessionMenu();
+  const menu = document.createElement("div");
+  menu.className = "session-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "会话操作");
+  const actions = [
+    ["重命名", "POST /api/sessions/{session_id}/rename", () => renameSession(session)],
+    ["复制 ID", null, () => copySessionId(session.session_id)],
+    ["删除会话", "DELETE /api/sessions/{session_id}", () => deleteSession(session)],
+  ];
+  for (const [label, capability, action] of actions) {
+    if (capability && window.harnessCapabilities && !window.harnessCapabilities.http.includes(capability)) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.textContent = label;
+    button.addEventListener("click", () => { closeSessionMenu(true); action(); });
+    menu.appendChild(button);
+  }
+  document.body.appendChild(menu);
+  const anchor = trigger.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(x || anchor.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y || anchor.bottom, window.innerHeight - menu.offsetHeight - 8))}px`;
+  trigger.setAttribute("aria-expanded", "true");
+  const controller = new AbortController();
+  sessionMenuCleanup = (restoreFocus) => {
+    controller.abort();
+    menu.remove();
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus && trigger.isConnected) trigger.focus();
+  };
+  document.addEventListener("pointerdown", (event) => {
+    if (!menu.contains(event.target) && event.target !== trigger) closeSessionMenu();
+  }, {signal: controller.signal});
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" || event.key === "Tab") {
+      if (event.key === "Escape") event.preventDefault();
+      closeSessionMenu(true);
+    } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const buttons = [...menu.children];
+      const index = buttons.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 :
+        (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next].focus();
+    }
+  }, {signal: controller.signal});
+  window.addEventListener("resize", () => closeSessionMenu(), {signal: controller.signal});
+  window.addEventListener("harness-auth-expired", () => closeSessionMenu(), {signal: controller.signal});
+  document.addEventListener("scroll", () => closeSessionMenu(), {capture: true, signal: controller.signal});
+  menu.firstElementChild.focus();
+}
+
+function requestSessionName(session) {
+  const dialog = $("#session-rename-dialog");
+  const input = $("#session-name");
+  if (dialog.open) return Promise.resolve(null);
+  input.value = session.name || session.preview || "";
+  dialog.returnValue = "";
+  return new Promise(resolve => {
+    const controller = new AbortController();
+    window.addEventListener("harness-auth-expired", () => dialog.close(), {signal: controller.signal});
+    dialog.addEventListener("close", () => {
+      controller.abort();
+      resolve(dialog.returnValue === "save" ? input.value : null);
+    }, {once: true});
+    dialog.showModal();
+    input.focus();
+    input.select();
+  });
+}
+
+async function copySessionId(sessionId) {
+  try {
+    await navigator.clipboard.writeText(sessionId);
+    setStatus("ready", "Session ID 已复制");
+  } catch (_) {
+    // Clipboard API may be unavailable on a server accessed over HTTP.
+    window.prompt("请按 Ctrl+C / Cmd+C 复制会话 ID：", sessionId);
+  }
+}
+
+async function renameSession(session) {
+  if (State.isBusy) {
+    setStatus("busy", "请等待当前操作完成后再重命名会话。");
+    return;
+  }
+  const input = await requestSessionName(session);
+  if (input === null) return;
+  const name = input.trim();
+  if (!name || [...name].length > 80) {
+    setStatus("error", "会话名称须为 1–80 个字符。");
+    return;
+  }
+  setBusy(true);
+  let finalStatus;
+  try {
+    await apiPost(`/api/sessions/${encodeURIComponent(session.session_id)}/rename`, {name});
+    await loadSessions();
+    finalStatus = ["ready", "会话已重命名"];
+  } catch (error) {
+    finalStatus = ["error", `重命名失败：${error.message}`];
+  } finally {
+    setBusy(false);
+    setStatus(...finalStatus);
   }
 }
 
@@ -535,48 +643,21 @@ async function deleteSession(session) {
     setStatus("busy", "请等待当前回复完成后再删除会话。");
     return;
   }
-  if (!window.confirm(`永久删除会话？此操作无法恢复。\n${session.preview || "无原始会话预览"}\nID: ${session.session_id}\n仅删除历史对话；Token 账本、上传视频和业务任务均保留。`)) return;
+  if (!window.confirm(`永久删除会话？此操作无法恢复。\n${session.name || session.preview || "未命名会话"}\nID: ${session.session_id}\n仅删除历史对话；Token 账本、上传视频和业务任务均保留。`)) return;
   await performSessionDeletion(`/api/sessions/${encodeURIComponent(session.session_id)}?confirm=true`);
 }
 
-async function clearSessions() {
-  if (State.isBusy) {
-    setStatus("busy", "请等待当前回复完成后再删除历史。");
-    return;
-  }
-  try {
-    // Confirm a snapshot: do not delete sessions created after confirmation.
-    const preview = await apiPost("/api/sessions/clear-preview", {});
-    if (!preview.session_ids.length) {
-      setStatus("ready", "没有可删除的会话。");
-      return;
-    }
-    if (!window.confirm(`永久删除当前用户的 ${preview.session_ids.length} 个会话？此操作无法恢复。\n运行中的会话会被跳过。Token 账本、上传视频、业务任务和 scratchpad 均保留。`)) return;
-    await performSessionDeletion("/api/sessions", { session_ids: preview.session_ids, confirm: true });
-  } catch (e) {
-    setStatus("error", `删除历史失败：${e.message}`);
-  }
-}
-
-async function performSessionDeletion(url, body) {
+async function performSessionDeletion(url) {
   setBusy(true);
   let finalStatus;
   try {
     const response = await window.harnessFetch(url, {
       method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const report = await window.harnessReadResponse(response);
     if (report.deleted.includes(State.activeSessionId)) resetConversationView();
     await loadSessions();
-    const busy = report.skipped_running?.length || 0;
-    const errors = report.errors?.length || 0;
-    const missing = report.not_found?.length || 0;
-    finalStatus = [errors ? "error" : "ready", `已永久删除 ${report.deleted.length} 个会话` +
-      (busy ? `；跳过 ${busy} 个运行中会话` : "") +
-      (missing ? `；${missing} 个会话已不存在` : "") +
-      (errors ? `；${errors} 个删除失败，请刷新后重试` : "")];
+    finalStatus = ["ready", "已永久删除会话"];
   } catch (e) {
     finalStatus = ["error", `删除失败：${e.message}`];
   } finally {
@@ -2534,7 +2615,6 @@ function bind() {
   });
   els.sendBtn.addEventListener("click", send);
   els.newSessionBtn.addEventListener("click", newSession);
-  $("#clear-sessions-btn").addEventListener("click", clearSessions);
   els.settingsForm.addEventListener("submit", saveSettings);
   els.slashBtn.addEventListener("click", () => openPalette("slash"));
   els.skillsBtn.addEventListener("click", () => openPalette("skills"));

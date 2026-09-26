@@ -540,7 +540,6 @@ python3 -m src.main agent \
 | `session-info <session_id>` | Show the logged-in user's saved session ID, message count and input/output tokens; does not resume chat |
 | `usage [--details] [--json]` | Show the authenticated user’s lifetime token totals, independent of saved conversations |
 | `session-delete <session_id> [--yes]` | Permanently delete one current-user session; confirm by default; refuse running sessions |
-| `sessions-clear [--yes]` | Permanently delete a confirmed snapshot of current-user session JSON files; skip running sessions |
 | `agent-bg <prompt>` | Run the agent in a local background session |
 | `agent-ps` | List local background sessions |
 | `agent-logs <id>` | Show background session logs |
@@ -563,7 +562,9 @@ python3 -m src.main agent \
 | --- | --- | --- |
 | 新对话 | GUI「新对话」；`POST /api/chat` 或 `/api/chat/stream` 不传 `resume_session_id` | 打开空白对话；首条普通消息创建新 Session，不携带旧对话内容。按钮本身不调用服务端、不创建空文件。 |
 | 清除运行状态 | GUI「清除运行状态」；`POST /api/clear`；对话命令 `/clear` | 重置当前用户进程内的会话引用、会话用量缓存、插件会话状态和临时环境变量，退出当前对话。保存的历史仍可重新打开。不是删除历史，也不是重置历史总用量。 |
-| 删除历史 | GUI「删除历史／删除全部历史」；现有 `DELETE /api/sessions/{session_id}` / `DELETE /api/sessions`；CLI `session-delete` / `sessions-clear` | 经确认后永久删除保存的会话，运行中的会话跳过或拒绝删除。 |
+| 删除历史 | GUI 会话右键菜单「删除会话」；`DELETE /api/sessions/{session_id}`；CLI `session-delete <session_id>` | 经确认后永久删除指定的一条会话，运行中的会话拒绝删除；仅支持逐个删除。 |
+
+历史会话列表显示会话名称和北京时间（`YYYY-MM-DD HH:mm:ss`）。右键会话或点击 `⋯` 可重命名、复制完整 ID、删除会话。重命名通过 `POST /api/sessions/{session_id}/rename` 提交 `{"name": "新名称"}`，名称限 1–80 个字符，保存后刷新或继续对话均保留；不修改原始消息或 Token 用量。该接口遵循用户权限配置，只能修改当前用户的会话，运行中的会话返回 409。
 
 三种操作都保留独立 Token 账本、上传文件和业务任务记录，不会取消已提交的业务任务。
 GUI 生成回复期间禁止新建／切换对话和清除状态；其他标签页在同一用户回复期间调用 `/api/clear` 会立即得到 409。

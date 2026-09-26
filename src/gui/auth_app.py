@@ -138,13 +138,12 @@ def create_authenticated_app(template, auth_store=None):
         async def __call__(self, scope, receive, send):
             path = scope.get('path', '')
             if path.startswith('/api/'):
-                if scope['method'] == 'DELETE' or path == '/api/sessions/clear-preview':
+                if scope['method'] == 'DELETE':
                     from ..session_lifecycle import session_path
                     try:
                         session_path(root / 'users' / scope['auth_user']['user_id'] / 'sessions', '_scope_check')
                     except (OSError, ValueError):
                         return await error_response(403, 'unsafe user session directory')(scope, receive, send)
-                if scope['method'] == 'DELETE':
                     await asyncio.to_thread(store.usage_summary, scope['auth_user']['user_id'])
                 target = user_app(scope['auth_user'])
             else:

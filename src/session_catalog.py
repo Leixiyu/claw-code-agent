@@ -76,6 +76,7 @@ def list_saved_sessions(directory: Path, *, limit: int | None = 20) -> dict:
             sessions.append({
                 'session_id': path.stem,
                 'preview': session_preview(payload),
+                'name': normalize_preview(payload['name']) if isinstance(payload.get('name'), str) else '',
                 'modified_at': modified,
                 'modified_at_display': datetime.fromtimestamp(
                     modified, timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),

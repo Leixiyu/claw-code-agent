@@ -110,12 +110,11 @@ claw-code-agent sessions
 claw-code-agent session-info <session_id>
 claw-code-agent agent-chat --resume-session-id <session_id>
 claw-code-agent session-delete <session_id>
-claw-code-agent sessions-clear
 claw-code-agent logout
 ```
 
 聊天中 `/exit` 退出，`/compact` 压缩上下文，`/clear` 重置当前会话但不删除历史。
-删除命令默认确认（可加 `--yes`），永久删除当前用户会话 JSON，运行中会话拒绝删除/跳过；
+删除命令默认确认（可加 `--yes`），每次仅永久删除当前用户指定的一条会话 JSON，运行中会话拒绝删除；
 保留视频、业务索引及 scratchpad。不要手动清除 `sessions/.lifecycle/` 删除标记。
 
 ## 4. GUI 与 systemd

@@ -36,8 +36,7 @@ from ..bundled_skills import get_bundled_skills
 from ..paste_refs import PastedContent, expand_pasted_text_refs
 from ..session_catalog import list_saved_sessions
 from ..session_lifecycle import (
-    SessionBusyError, SessionDeletedError, clear_saved_sessions,
-    delete_saved_session, session_deletion_candidates,
+    SessionBusyError, SessionDeletedError, delete_saved_session, rename_saved_session,
 )
 from ..session_store import (
     StoredAgentSession,
@@ -401,9 +400,8 @@ class PastedContentPayload(BaseModel):
     filename: str | None = None
 
 
-class SessionClearRequest(BaseModel):
-    session_ids: list[str] = Field(max_length=10000)
-    confirm: bool = False
+class SessionRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
 
 
 class ChatRequest(BaseModel):
@@ -608,18 +606,6 @@ def create_user_app(state: AgentState) -> FastAPI:
             finally:
                 state.lock().release()
 
-    @app.post('/api/sessions/clear-preview')
-    async def preview_session_deletion() -> dict:
-        return {'session_ids': session_deletion_candidates(state.session_directory)}
-
-    @app.delete('/api/sessions')
-    async def clear_sessions(request: SessionClearRequest) -> dict:
-        if not request.confirm:
-            raise HTTPException(status_code=400, detail='Permanent deletion requires confirmation')
-        report = await asyncio.to_thread(clear_saved_sessions, state.session_directory, request.session_ids)
-        _forget_deleted_sessions(report['deleted'])
-        return report
-
     @app.delete('/api/sessions/{session_id}')
     async def delete_session(session_id: str, confirm: bool = False) -> dict:
         if not confirm:
@@ -642,6 +628,18 @@ def create_user_app(state: AgentState) -> FastAPI:
         response.headers['X-Session-Total'] = str(listing['total'])
         response.headers['X-Session-Skipped'] = str(listing['skipped'])
         return listing['sessions']
+
+    @app.post('/api/sessions/{session_id}/rename')
+    async def rename_session(session_id: str, request: SessionRenameRequest) -> dict:
+        try:
+            return await asyncio.to_thread(
+                rename_saved_session, state.session_directory, session_id, request.name)
+        except SessionBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get('/api/sessions/{session_id}')
     async def get_session(session_id: str) -> dict[str, Any]:

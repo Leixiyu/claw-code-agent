@@ -19,7 +19,6 @@ function fixture({ confirm = true, report = { deleted: ['one'] }, status = 200 }
     setBusy(busy) { state.isBusy = busy; calls.push(['status', busy ? 'busy' : 'ready', busy ? 'Working…' : 'Ready']); },
     resetConversationView() { state.activeSessionId = null; calls.push(['new']); },
     async loadSessions() { calls.push(['reload']); },
-    async apiPost(url) { calls.push(['preview', url]); return { session_ids: ['one', 'two'] }; },
     async fetch(url, options) {
       calls.push(['delete', url, options]);
       return { ok: status === 200, status, json: async () => report };
@@ -36,12 +35,11 @@ function fixture({ confirm = true, report = { deleted: ['one'] }, status = 200 }
   return { context, calls, state };
 }
 
-test('cancel single or bulk deletion sends no DELETE request', async () => {
+test('cancel deletion sends no DELETE request', async () => {
   const { context, calls } = fixture({ confirm: false });
   await context.deleteSession({ session_id: 'one', preview: 'query' });
-  await context.clearSessions();
   assert.equal(calls.filter(c => c[0] === 'delete').length, 0);
-  assert.equal(calls.filter(c => c[0] === 'confirm').length, 2);
+  assert.equal(calls.filter(c => c[0] === 'confirm').length, 1);
   assert.match(calls[0][1], /永久删除.*无法恢复/);
 });
 
@@ -52,20 +50,18 @@ test('deleting active session resets chat and preserves success status', async (
   assert.equal(state.activeSessionId, null);
   assert.equal(state.isBusy, false);
   assert.equal(calls.filter(c => c[0] === 'reload').length, 1);
-  assert.match(calls.at(-1)[2], /已永久删除 1 个会话/);
+  assert.match(calls.at(-1)[2], /已永久删除会话/);
 });
 
-test('bulk deletion submits confirmed snapshot and reports skipped/error counts', async () => {
-  const { context, calls, state } = fixture({ report: {
-    deleted: ['two'], skipped_running: ['one'], not_found: ['missing'], errors: [{ session_id: 'bad' }],
-  } });
-  await context.clearSessions();
+test('deleting another session keeps the current conversation and targets only the selected ID', async () => {
+  const { context, calls, state } = fixture({report: {deleted: ['two']}});
+  await context.deleteSession({session_id: 'two'});
   const request = calls.find(c => c[0] === 'delete');
-  assert.deepEqual(JSON.parse(request[2].body), { session_ids: ['one', 'two'], confirm: true });
+  assert.equal(request[1], '/api/sessions/two?confirm=true');
+  assert.equal(request[2].method, 'DELETE');
+  assert.equal(request[2].body, undefined);
   assert.equal(state.activeSessionId, 'one');
-  assert.equal(calls.at(-1)[1], 'error');
-  assert.match(calls.at(-1)[2], /跳过 1 个运行中会话/);
-  assert.match(calls.at(-1)[2], /1 个删除失败/);
+  assert.equal(calls.at(-1)[1], 'ready');
 });
 
 test('busy HTTP response preserves chat and error message', async () => {
@@ -81,6 +77,5 @@ test('current browser turn disables deletion and confirmation', async () => {
   const { context, calls, state } = fixture();
   state.isBusy = true;
   await context.deleteSession({ session_id: 'one' });
-  await context.clearSessions();
   assert.equal(calls.filter(c => c[0] !== 'status').length, 0);
 });

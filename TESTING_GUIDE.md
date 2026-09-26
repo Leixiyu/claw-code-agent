@@ -2014,14 +2014,13 @@ symlink rejection and preview persistence through real runtime resume/compact pa
 For deletion QA, use disposable test sessions, not valuable chat history:
 
 1. `session-delete <id>`: cancel first and verify no change; confirm and verify the JSON and preview disappear.
-2. `sessions-clear`: confirm the snapshot; running entries must be reported/skipped. `--yes` bypasses only the prompt.
-3. GUI: open an idle session, delete it with confirmation, and verify New chat and the refreshed list.
-   Cancel clear-all once, then confirm against disposable chats. Another user's sessions must remain untouched.
-4. Resume a saved session with a blocking fake model in another process/thread. Delete must fail with a busy error
-   (GUI HTTP 409); bulk clear must skip it. After the turn finishes, deletion should work.
-5. Keep an old session object/window, delete elsewhere, then resume/save: it must report deletion, never recreate JSON
+2. GUI: open an idle session, choose Delete session from its context menu, confirm, and verify New chat and the refreshed list.
+   Only the selected session is deleted; all other sessions and other users' sessions must remain untouched.
+3. Resume a saved session with a blocking fake model in another process/thread. Delete must fail with a busy error
+   (GUI HTTP 409). After the turn finishes, deletion should work. `--yes` bypasses only the CLI confirmation prompt.
+4. Keep an old session object/window, delete elsewhere, then resume/save: it must report deletion, never recreate JSON
    or call the model. An old CLI switches to a new session but does not automatically resend the rejected prompt.
-6. Check uploads, task indexes, scratchpad, auth and background records remain unchanged. Only ID-based markers remain
+5. Check uploads, task indexes, scratchpad, auth and background records remain unchanged. Only ID-based markers remain
    in `sessions/.lifecycle/`, with no conversation content. `/clear` must still leave stored chats alone.
 
 Restart all older CLI/GUI/worker processes before testing cross-process protection; old versions do not acquire these locks.

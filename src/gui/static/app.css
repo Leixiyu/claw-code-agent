@@ -130,6 +130,7 @@ body {
 }
 
 .sidebar-title {
+  display: block;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -145,6 +146,7 @@ body {
 }
 
 .session-item {
+  position: relative;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-dim);
@@ -188,32 +190,63 @@ body {
   color: inherit;
   font: inherit;
   text-align: left;
-  padding: 0;
+  padding: 0 24px 0 0;
   cursor: pointer;
   min-width: 0;
 }
 
 .session-open .session-preview { display: block; }
-.session-id {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  background: transparent;
+.session-menu-trigger {
+  position: absolute;
+  top: 5px;
+  right: 6px;
   border: 0;
-  color: var(--text-muted);
-  font: 10px monospace;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 18px;
+  line-height: 24px;
+  width: 24px;
+  padding: 0;
+  cursor: pointer;
 }
-.session-item .session-copy, .session-item .session-delete {
-  align-self: flex-start;
-  font-size: 11px;
-  width: auto;
-  height: auto;
-  white-space: nowrap;
-  padding: 4px 6px;
+.session-menu-trigger:hover { background: var(--bg); }
+.session-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 150px;
+  padding: 5px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
 }
-.session-actions { display: flex; gap: 8px; }
-.session-item .session-delete { color: var(--text-muted); }
-#clear-sessions-btn { margin: 4px 0 8px; cursor: pointer; }
+.session-context-menu button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.session-context-menu button:hover,
+.session-context-menu button:focus-visible { background: var(--accent-soft); }
+.session-rename-dialog {
+  width: min(400px, 90vw);
+  padding: 24px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.session-rename-dialog::backdrop { background: #0008; }
+.session-rename-dialog h2 { margin: 0 0 8px; font-size: 18px; }
+.session-rename-actions { display: flex; justify-content: flex-end; gap: 8px; }
 #session-list-info { font-size: 11px; color: var(--text-muted); }
 
 .empty-state {
@@ -1231,7 +1264,7 @@ body {
 .usage-dialog button:disabled { opacity: .45; }
 
 /* Text actions must not inherit the fixed 32px icon-button width. */
-#clear-btn, #account-logout, .session-actions .btn-ghost { width: auto; white-space: nowrap; flex-shrink: 0; }
+#clear-btn, #account-logout { width: auto; white-space: nowrap; flex-shrink: 0; }
 .topbar-left { min-width: 0; }
 .topbar-right { flex-shrink: 0; }
 #status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

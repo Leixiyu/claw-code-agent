@@ -24,12 +24,14 @@
           <span class="brand-name">Claw&nbsp;Code</span>
         </div>
         <button id="new-session-btn" data-api="POST /api/chat/stream" class="btn-primary" type="button" title="打开空白对话，发送首条消息后创建新会话；保留历史和 Token 用量">+ 新对话</button>
-        <label data-api="POST /api/uploads">上传视频 <input id="video-upload" type="file" accept="video/*" multiple /></label>
+        <div data-api="POST /api/uploads">
+          <label class="sidebar-title" for="video-upload">上传视频</label>
+          <input id="video-upload" type="file" accept="video/*" multiple />
+        </div>
       </div>
       <div class="sidebar-content">
         <div class="sidebar-section" data-api="GET /api/sessions">
-          <div class="sidebar-title">Sessions</div>
-          <button id="clear-sessions-btn" data-api="DELETE /api/sessions|POST /api/sessions/clear-preview" type="button" title="永久删除选定的历史对话；不删除上传文件、业务任务或 Token 账本">删除全部历史</button>
+          <div class="sidebar-title">历史会话</div>
           <div id="session-list-info" class="session-meta" aria-live="polite"></div>
           <div id="session-list" class="session-list">
             <div class="empty-state">Loading…</div>
@@ -238,7 +240,6 @@
           <button id="send-btn" data-api="POST /api/chat/stream" type="button" class="btn-send" title="Send">Send</button>
         </div>
         <div class="composer-meta">
-          <span id="cwd-meta"></span>
           <span id="usage-meta"></span>
         </div>
       </footer>
@@ -566,6 +567,17 @@
       </section>
     </main>
   </div>
+
+  <dialog id="session-rename-dialog" class="session-rename-dialog" aria-labelledby="session-rename-title">
+    <form method="dialog" class="settings">
+      <h2 id="session-rename-title">重命名会话</h2>
+      <label>会话名称 <input id="session-name" type="text" maxlength="80" required autocomplete="off" /></label>
+      <div class="session-rename-actions">
+        <button class="btn-secondary" value="cancel" formnovalidate>取消</button>
+        <button class="btn-primary" value="save">保存</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="usage-dialog" class="usage-dialog" aria-labelledby="usage-dialog-title">
     <div class="usage-dialog-head"><h2 id="usage-dialog-title">Token 请求明细</h2><button id="usage-close" type="button">关闭</button></div>

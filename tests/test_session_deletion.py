@@ -22,8 +22,8 @@ from src.gui.server import AgentState, create_app
 from src.main import _run_agent_chat_loop, main
 from src.session_catalog import list_saved_sessions
 from src.session_lifecycle import (
-    SessionBusyError, SessionDeletedError, clear_saved_sessions,
-    delete_saved_session, session_deletion_candidates, session_guard,
+    SessionBusyError, SessionDeletedError,
+    delete_saved_session, rename_saved_session, session_guard,
 )
 from src.session_store import StoredAgentSession, read_agent_session, save_agent_session
 
@@ -46,6 +46,36 @@ class SessionDeletionFixture(unittest.TestCase):
 
 
 class SessionDeletionTests(SessionDeletionFixture):
+    def test_rename_preserves_content_usage_and_survives_stale_agent_save(self):
+        path = self.save()
+        before = json.loads(path.read_text())
+        stale = read_agent_session('one', self.directory)
+        rename_saved_session(self.directory, 'one', '  矿区视频分析  ')
+        self.assertEqual(json.loads(path.read_text()), {**before, 'name': '矿区视频分析'})
+        save_agent_session(stale, self.directory)
+        self.assertEqual(list_saved_sessions(self.directory)['sessions'][0]['name'], '矿区视频分析')
+        self.assertEqual(json.loads(path.read_text()), {**before, 'name': '矿区视频分析'})
+
+    def test_rename_rejects_invalid_busy_deleted_and_redirected_sessions(self):
+        path = self.save()
+        before = path.read_bytes()
+        for name in (' ', 'a' * 81, 'name\nline', 'hidden\x00name'):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                rename_saved_session(self.directory, 'one', name)
+        with session_guard(self.directory, 'one', active=True):
+            with self.assertRaises(SessionBusyError):
+                rename_saved_session(self.directory, 'one', 'busy')
+        with self.assertRaises(FileNotFoundError):
+            rename_saved_session(self.directory, '../one', 'unsafe')
+        (self.directory / 'link.json').symlink_to(path)
+        with self.assertRaises(ValueError):
+            rename_saved_session(self.directory, 'link', 'unsafe')
+        self.assertEqual(path.read_bytes(), before)
+        delete_saved_session(self.directory, 'one')
+        with self.assertRaises(SessionDeletedError):
+            rename_saved_session(self.directory, 'one', 'deleted')
+        self.assertFalse(path.exists())
+
     def test_permanent_delete_only_session_and_reject_stale_save(self):
         path = self.save()
         saved = read_agent_session('one', self.directory)
@@ -71,23 +101,20 @@ class SessionDeletionTests(SessionDeletionFixture):
             delete_saved_session(self.directory, 'one')
         self.save('new')
 
-    def test_clear_snapshot_busy_corrupt_symlink_and_unrelated_user(self):
+    def test_delete_one_preserves_other_sessions_and_rejects_unsafe_paths(self):
         self.save()
         self.save('busy')
         (self.directory / 'corrupt.json').write_text('not JSON')
         other = self.save('other', self.root / 'other-user' / 'sessions')
         (self.directory / 'link.json').symlink_to(other)
-        snapshot = session_deletion_candidates(self.directory)
-        self.assertEqual(snapshot, ['busy', 'corrupt', 'one'])
-        self.save('after-confirmation')
         with session_guard(self.directory, 'busy', active=True):
-            report = clear_saved_sessions(self.directory, snapshot + ['missing', '../other'])
-        self.assertEqual(report['deleted'], ['corrupt', 'one'])
-        self.assertEqual(report['skipped_running'], ['busy'])
-        self.assertEqual(report['not_found'], ['missing', '../other'])
+            with self.assertRaises(SessionBusyError):
+                delete_saved_session(self.directory, 'busy')
+            self.assertEqual(delete_saved_session(self.directory, 'one'), {'deleted': ['one']})
         self.assertTrue(other.exists())
         self.assertTrue((self.directory / 'busy.json').exists())
-        self.assertTrue((self.directory / 'after-confirmation.json').exists())
+        self.assertTrue((self.directory / 'corrupt.json').exists())
+        self.assertEqual(delete_saved_session(self.directory, 'corrupt'), {'deleted': ['corrupt']})
         with self.assertRaises(ValueError):
             delete_saved_session(self.directory, 'link')
         for sid in ('', '../one', 'a/b', '.', 'a' * 201):
@@ -127,7 +154,6 @@ class SessionDeletionTests(SessionDeletionFixture):
             self.assertEqual(process.stdout.readline().strip(), 'locked')
             with self.assertRaises(SessionBusyError):
                 delete_saved_session(self.directory, 'one')
-            self.assertEqual(clear_saved_sessions(self.directory, ['one'])['skipped_running'], ['one'])
             process.communicate('\n', timeout=10)
             self.assertEqual(process.returncode, 0)
         finally:
@@ -147,9 +173,8 @@ class SessionDeletionTests(SessionDeletionFixture):
     def test_failed_unlink_is_reported_and_can_be_retried_without_resurrection(self):
         path = self.save()
         with patch.object(Path, 'unlink', side_effect=PermissionError('test denied')):
-            report = clear_saved_sessions(self.directory, ['one'])
-        self.assertEqual(report['deleted'], [])
-        self.assertEqual(report['errors'][0]['session_id'], 'one')
+            with self.assertRaises(PermissionError):
+                delete_saved_session(self.directory, 'one')
         self.assertTrue(path.exists())
         with self.assertRaises(SessionDeletedError):
             self.save()
@@ -212,6 +237,29 @@ class SessionDeletionTests(SessionDeletionFixture):
 
 class AuthenticatedDeletionTests(SessionDeletionFixture):
     # Shared temporary fixture; keep authentication/API tests independent of a real .env.
+
+    def test_gui_rename_is_persistent_validated_and_user_scoped(self):
+        self.save()
+        other = self.save('bob-only', self.other_directory)
+        state = AgentState(cwd=self.workspace, model='test', base_url='http://model.invalid',
+                           api_key='fake', allow_shell=False, allow_write=False,
+                           session_directory=self.workspace / 'sessions')
+        with TestClient(create_app(state, auth_store=self.store)) as client:
+            endpoint = '/api/sessions/one/rename'
+            self.assertEqual(client.post(endpoint, json={'name': 'test'}).status_code, 401)
+            self.assertEqual(client.post('/api/sessions/bob-only/rename', headers=self.headers,
+                                         json={'name': 'test'}).status_code, 404)
+            for name in ('', ' ', 'a' * 81, 'a\nb'):
+                self.assertIn(client.post(endpoint, headers=self.headers,
+                                          json={'name': name}).status_code, (400, 422))
+            with session_guard(self.directory, 'one', active=True):
+                self.assertEqual(client.post(endpoint, headers=self.headers,
+                                             json={'name': 'test'}).status_code, 409)
+            response = client.post(endpoint, headers=self.headers, json={'name': '矿区巡检'})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {'session_id': 'one', 'name': '矿区巡检'})
+            self.assertEqual(client.get('/api/sessions', headers=self.headers).json()[0]['name'], '矿区巡检')
+            self.assertNotIn('name', json.loads(other.read_text()))
     def setUp(self):
         super().setUp()
         self.workspace = self.root / 'workspace'
@@ -231,16 +279,14 @@ class AuthenticatedDeletionTests(SessionDeletionFixture):
         self.directory.symlink_to(self.other_directory, target_is_directory=True)
         with patch.dict(os.environ, self.env), redirect_stderr(io.StringIO()):
             self.assertEqual(main(['session-delete', 'bob-only', '--yes']), 1)
-            self.assertEqual(main(['sessions-clear', '--yes']), 1)
         state = AgentState(cwd=self.workspace, model='test', base_url='http://model.invalid',
                            api_key='fake', allow_shell=False, allow_write=False,
                            session_directory=self.workspace / 'sessions')
         with TestClient(create_app(state, auth_store=self.store)) as client:
             self.assertEqual(client.delete('/api/sessions/bob-only?confirm=true', headers=self.headers).status_code, 403)
-            self.assertEqual(client.post('/api/sessions/clear-preview', headers=self.headers).status_code, 403)
         self.assertTrue(other.exists())
 
-    def test_cli_confirmation_yes_cancel_empty_expiry_and_user_scope(self):
+    def test_cli_confirmation_yes_cancel_missing_expiry_and_user_scope(self):
         own = self.save()
         other = self.save('bob-only', self.other_directory)
         with patch.dict(os.environ, self.env):
@@ -248,7 +294,7 @@ class AuthenticatedDeletionTests(SessionDeletionFixture):
                 self.assertEqual(main(['session-delete', 'one']), 0)
             self.assertTrue(own.exists())
             with patch('builtins.input', side_effect=EOFError), redirect_stdout(io.StringIO()):
-                self.assertEqual(main(['sessions-clear']), 0)
+                self.assertEqual(main(['session-delete', 'one']), 0)
             self.assertTrue(own.exists())
             with redirect_stderr(io.StringIO()):
                 self.assertEqual(main(['session-delete', 'bob-only', '--yes']), 1)
@@ -258,23 +304,46 @@ class AuthenticatedDeletionTests(SessionDeletionFixture):
             self.assertFalse(own.exists())
             self.save('two')
             self.save('busy')
-            with session_guard(self.directory, 'busy', active=True), redirect_stdout(io.StringIO()) as out:
-                self.assertEqual(main(['sessions-clear', '--yes']), 0)
-            self.assertIn('skipped_running', out.getvalue())
+            with session_guard(self.directory, 'busy', active=True), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(main(['session-delete', 'busy', '--yes']), 1)
             with patch('builtins.input', return_value='yes'), redirect_stdout(io.StringIO()):
-                self.assertEqual(main(['sessions-clear']), 0)
-            with patch('builtins.input') as prompt, redirect_stdout(io.StringIO()):
-                self.assertEqual(main(['sessions-clear']), 0)
+                self.assertEqual(main(['session-delete', 'two']), 0)
+            self.assertTrue((self.directory / 'busy.json').exists())
+            with patch('builtins.input') as prompt, redirect_stderr(io.StringIO()):
+                self.assertEqual(main(['session-delete', 'missing']), 1)
                 prompt.assert_not_called()
             self.save('expired')
             with self.store.connect() as db:
                 db.execute('UPDATE tokens SET expires = 0')
             with redirect_stderr(io.StringIO()):
-                self.assertEqual(main(['sessions-clear', '--yes']), 1)
+                self.assertEqual(main(['session-delete', 'expired', '--yes']), 1)
             self.assertTrue((self.directory / 'expired.json').exists())
         self.assertTrue(other.exists())
 
-    def test_gui_delete_clear_authorization_confirmation_and_stale_chat(self):
+    def test_removed_bulk_entrypoints_cannot_delete_sessions(self):
+        own = self.save()
+        with patch.dict(os.environ, self.env), redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as result:
+                main(['sessions-clear', '--yes'])
+            self.assertEqual(result.exception.code, 2)
+        state = AgentState(cwd=self.workspace, model='test', base_url='http://model.invalid',
+                           api_key='fake', allow_shell=False, allow_write=False,
+                           session_directory=self.workspace / 'sessions')
+        app = create_app(state, auth_store=self.store)
+        with TestClient(app) as client:
+            capabilities = client.get('/api/capabilities', headers=self.headers).json()['http']
+            self.assertNotIn('DELETE /api/sessions', capabilities)
+            self.assertNotIn('POST /api/sessions/clear-preview', capabilities)
+            self.assertEqual(client.request('DELETE', '/api/sessions', headers=self.headers,
+                json={'session_ids': ['one'], 'confirm': True}).status_code, 403)
+            self.assertEqual(client.post('/api/sessions/clear-preview', headers=self.headers).status_code, 403)
+            client.get('/api/sessions', headers=self.headers)
+            with TestClient(next(iter(app.state.user_apps.values()))) as inner:
+                self.assertEqual(inner.delete('/api/sessions').status_code, 405)
+                self.assertEqual(inner.post('/api/sessions/clear-preview').status_code, 405)
+        self.assertTrue(own.exists())
+
+    def test_gui_delete_authorization_confirmation_and_stale_chat(self):
         self.save()
         self.save('busy')
         other = self.save('bob-only', self.other_directory)
@@ -284,7 +353,6 @@ class AuthenticatedDeletionTests(SessionDeletionFixture):
         app = create_app(state, auth_store=self.store)
         with TestClient(app) as client:
             self.assertEqual(client.delete('/api/sessions/one?confirm=true').status_code, 401)
-            self.assertEqual(client.request('DELETE', '/api/sessions', json={'session_ids': ['one'], 'confirm': True}).status_code, 401)
             self.assertEqual(client.delete('/api/sessions/one', headers=self.headers).status_code, 400)
             self.assertEqual(client.delete('/api/sessions/bob-only?confirm=true', headers=self.headers).status_code, 404)
             self.assertEqual(client.delete('/api/sessions/one?confirm=true',
@@ -303,18 +371,7 @@ class AuthenticatedDeletionTests(SessionDeletionFixture):
                         json={'prompt': 'continue', 'resume_session_id': 'one'})
                     self.assertEqual(response.status_code, 404)
                     run.assert_not_called()
-                self.save('two')
-                (self.directory / 'corrupt.json').write_text('bad JSON')
-                preview = client.post('/api/sessions/clear-preview', headers=self.headers).json()
-                self.save('new-after-preview')
-                self.assertEqual(client.request('DELETE', '/api/sessions', headers=self.headers,
-                    json=preview).status_code, 400)
-                response = client.request('DELETE', '/api/sessions', headers=self.headers,
-                    json={**preview, 'confirm': True})
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json()['deleted'], ['corrupt', 'two'])
-                self.assertEqual(response.json()['skipped_running'], ['busy'])
-            self.assertTrue((self.directory / 'new-after-preview.json').exists())
+            self.assertTrue((self.directory / 'busy.json').exists())
             self.assertTrue(other.exists())
             self.store.logout(self.token)
             self.assertEqual(client.delete('/api/sessions/busy?confirm=true', headers=self.headers).status_code, 401)

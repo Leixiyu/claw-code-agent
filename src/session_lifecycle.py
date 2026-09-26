@@ -9,10 +9,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import os
+import json
 from pathlib import Path
 import re
 import stat
 import threading
+import unicodedata
 
 
 class SessionBusyError(ValueError):
@@ -98,6 +100,26 @@ def session_guard(directory: Path, session_id: str, *, active: bool = False,
         mutex.release()
 
 
+def rename_saved_session(directory: Path, session_id: str, name: str) -> dict:
+    """Update display metadata under the same lock as turns, saves and deletion."""
+    from .user_workspace import atomic_json
+
+    name = name.strip()
+    if not name or len(name) > 80 or any(unicodedata.category(c).startswith('C') for c in name):
+        raise ValueError('会话名称须为 1–80 个字符，且不能包含控制字符。')
+    with session_guard(directory, session_id) as lock:
+        if lock.active:
+            raise SessionBusyError('会话正在运行，请完成后再重命名。')
+        path = session_path(directory, session_id)
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        if (not isinstance(payload, dict) or not isinstance(payload.get('messages'), list)
+                or payload.get('session_id', session_id) != session_id):
+            raise ValueError('Invalid session file')
+        payload['name'] = name
+        atomic_json(path, payload)
+    return {'session_id': session_id, 'name': name}
+
+
 def delete_saved_session(directory: Path, session_id: str) -> dict:
     """Delete exactly one session JSON; never its uploads, scratchpad or tasks."""
     path = session_path(directory, session_id)
@@ -116,32 +138,3 @@ def delete_saved_session(directory: Path, session_id: str) -> dict:
         os.fsync(lock.fd)
         path.unlink()
     return {'deleted': [session_id]}
-
-
-def session_deletion_candidates(directory: Path) -> list[str]:
-    """Snapshot regular JSON filenames, including unreadable/corrupt sessions."""
-    session_path(directory, '_scope_check')
-    candidates = []
-    for path in directory.glob('*.json'):
-        try:
-            if session_path(directory, path.stem).is_file():
-                candidates.append(path.stem)
-        except (ValueError, OSError):
-            continue
-    return sorted(candidates)
-
-
-def clear_saved_sessions(directory: Path, session_ids: list[str]) -> dict:
-    """Delete a confirmed snapshot only; leave busy/unsafe entries untouched."""
-    report: dict[str, list] = {'deleted': [], 'skipped_running': [], 'not_found': [], 'errors': []}
-    for session_id in dict.fromkeys(session_ids):
-        try:
-            delete_saved_session(directory, session_id)
-            report['deleted'].append(session_id)
-        except SessionBusyError:
-            report['skipped_running'].append(session_id)
-        except FileNotFoundError:
-            report['not_found'].append(session_id)
-        except (OSError, ValueError) as exc:
-            report['errors'].append({'session_id': session_id, 'error': str(exc)})
-    return report
