@@ -29,6 +29,12 @@ claw-code-agent agent-chat
 claw-code-gui --no-browser
 ```
 
+启动 GUI 服务后，访问同站点的 `/docs` 查看并调试最新公开 API，`/openapi.json` 提供机器可读规范。
+文档按中文分组汇总认证层及用户应用的真实路由，仅展示 `USER_AVAILABLE` / `USER_UNAVAILABLE` 允许的接口。
+可先在 GUI 或文档中的 `/api/auth/login` 登录（自动使用 Cookie），也可在 **Authorize → BearerAuth** 粘贴登录令牌。
+「系统信息」提供当前用户运行配置和能力，「服务健康」查询依赖状态，「Token 用量」查询含已删除会话的历史消耗。
+接口和权限调整后重启服务即可更新文档，无需维护另一份接口白名单。文档的 **Execute** 会实际执行所选操作。
+
 Configure AGENT_WORKSPACE in the project .env. It is a container for users/<user_id>/,
 not the cwd exposed to every agent. Credentials live outside it (HARNESS_AUTH_DIR).
 Each user has uploads/, sessions/, runtime directories and three task ID/status indexes.

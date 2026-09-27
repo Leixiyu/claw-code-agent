@@ -31,7 +31,10 @@ def create_authenticated_app(template, auth_store=None):
     store = auth_store or AuthStore(template.cwd)
     root = store.workspace
     ledger = store.usage_ledger()
-    app = FastAPI(title='Claw Code authenticated prototype')
+    app = FastAPI(title='Harness API', version='0.1.0', swagger_ui_parameters={
+        'filter': True, 'docExpansion': 'none', 'displayRequestDuration': True,
+        'persistAuthorization': False,
+    })
     from .health_routes import create_health_router
     app.include_router(create_health_router())
     user_apps = {}
@@ -181,4 +184,6 @@ def create_authenticated_app(template, auth_store=None):
 
     app.add_middleware(AuthenticationMiddleware)
     install_error_handlers(app)
+    from .openapi_docs import install_public_openapi
+    install_public_openapi(app, lambda: create_user_app(template))
     return app

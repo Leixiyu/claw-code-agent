@@ -140,6 +140,20 @@ ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
 若已有部署监听 `0.0.0.0`，可在网络允许时访问 `http://183.11.226.132:8765`；
 公网使用应配置 HTTPS 和访问限制，不建议直接暴露 HTTP 登录。
 
+### 在线 API 文档
+
+GUI 服务启动后，同一端口自动提供 `/docs`（Swagger UI）和 `/openapi.json`，不需要额外启动文档服务。
+例如通过上述隧道访问 `http://127.0.0.1:8765/docs`；现有公网部署对应 `http://183.11.226.132:8765/docs`。
+
+- 按「用户认证、对话、历史会话、文件上传、Token 用量、系统信息、服务健康」分组，仅展示允许用户调用的接口。
+- 文档页面无需登录；除登录和健康检查外，执行接口需要认证。先在同站点 GUI 或文档登录接口登录，浏览器自动携带 Cookie。
+  也可把登录结果中的 `access_token` 填入 **Authorize → BearerAuth**，不加 `Bearer ` 前缀。
+- 查询 `/api/state`、`/api/capabilities`、`/health` 和 `/api/usage` 可查看当前用户运行配置、可用能力、依赖状态和历史 Token 用量。
+  **Execute** 会发送真实请求；示例不是服务器实时数据。
+- 上传使用 `X-Filename` 和二进制请求体；聊天流使用 NDJSON。文档说明了这两类请求及统一错误结构。
+- 路由和权限由代码生成并缓存；更新代码及两组能力配置后，按下文发布步骤重装并重启服务即可刷新文档。
+  Swagger UI 的 JS/CSS 沿用 FastAPI 默认 CDN，浏览器需要能访问该 CDN；`/openapi.json` 不依赖它。
+
 ### 配置常驻服务
 
 先停止前台 GUI，避免端口冲突。编辑：
