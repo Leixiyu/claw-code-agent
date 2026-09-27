@@ -6,7 +6,6 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
-import re
 import secrets
 import sqlite3
 import time
@@ -65,8 +64,9 @@ class AuthStore:
         return hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt), 600_000).hex()
 
     def create_user(self, username: str, password: str) -> dict:
-        if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', username):
-            raise ValueError('username must contain 1–64 letters, digits, _, . or -')
+        if (not 1 <= len(username) <= 64 or username != username.strip()
+                or not all(char.isalnum() or char in '_.- ' for char in username)):
+            raise ValueError('用户名须为 1–64 个字符，可包含中文、字母、数字、空格及 _ . -，首尾不能有空格。')
         if len(password) < 8:
             raise ValueError('password must have at least 8 characters')
         user_id, salt = uuid4().hex, secrets.token_hex(16)

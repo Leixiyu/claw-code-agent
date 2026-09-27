@@ -99,6 +99,10 @@ claw-code-agent agent-chat --show-transcript
 创建账号时交互设置密码（至少 8 位），没有默认密码。Token 有效期 12 小时；
 同一认证目录的 CLI 共享登录凭证，`HARNESS_AUTH_TOKEN` 环境变量会优先覆盖它。
 
+用户名支持 1–64 个字符，可包含中文、字母、数字、内部空格及 `_ . -`，首尾不能有空格。
+包含空格时请加引号，例如 `claw-code-agent users-create "ray chen"`；中文示例：`claw-code-agent users-create 雷晞宇`。
+GUI 圆形头像中，纯汉字用户名取最后两个汉字（单字取该字），其他用户名取前两个空格分隔部分的首字符并大写；只有一部分时取其大写首字符。
+
 Harness 自动创建 `users/<user_id>/` 下的 uploads、sessions、三个任务索引及运行目录；
 无需手工创建每个用户的目录。视频通过 GUI 上传，业务结果保存在 Business 后端，
 聊天记录可包含结果内容。

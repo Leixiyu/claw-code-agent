@@ -1,5 +1,12 @@
 "use strict";
 
+function userAvatarText(username) {
+  const name = username.trim();
+  if (!name) return "?";
+  if (/^\p{Script=Han}+$/u.test(name)) return [...name].slice(-2).join("");
+  return name.split(/\s+/u).slice(0, 2).map(part => [...part][0].toUpperCase()).join("");
+}
+
 // API metadata describes each control; the server's two sets remain the policy.
 window.harnessApplyVisibility = function () {
   const capabilities = window.harnessCapabilities;
@@ -25,6 +32,8 @@ window.requireHarnessLogin = async function () {
     const capabilities = await window.harnessReadResponse(await window.harnessFetch('/api/capabilities'));
     window.harnessCapabilities = capabilities;
     document.querySelector('#signed-in-user').textContent = user.username;
+    document.querySelector('#signed-in-user').title = user.username;
+    document.querySelector('#user-avatar').textContent = userAvatarText(user.username);
     window.harnessApplyVisibility();
     panel.hidden = true;
     document.querySelector('#app').hidden = false;

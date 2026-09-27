@@ -182,7 +182,10 @@
           <button id="usage-show-requests" type="button" data-api="GET /api/usage/requests">查看明细</button>
         </div>
         <div class="sidebar-user">
-          <span>用户 <strong id="signed-in-user"></strong></span>
+          <div class="sidebar-user-identity">
+            <span id="user-avatar" class="user-avatar" aria-hidden="true"></span>
+            <strong id="signed-in-user"></strong>
+          </div>
           <button id="logout-user" data-api="POST /api/auth/logout" class="btn-secondary" type="button">退出登录</button>
         </div>
       </div>
