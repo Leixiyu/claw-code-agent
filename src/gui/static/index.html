@@ -8,7 +8,7 @@
 </head>
 <body>
   <section id="login-panel" style="max-width:360px;margin:12vh auto;padding:24px" hidden>
-    <h1>Claw Code 登录</h1>
+    <h1>Claw Code</h1>
     <form id="login-form" class="settings">
       <label>用户名 <input name="username" autocomplete="username" required /></label>
       <label>密码 <input name="password" type="password" autocomplete="current-password" required /></label>
@@ -182,7 +182,7 @@
           <button id="usage-show-requests" type="button" data-api="GET /api/usage/requests">查看明细</button>
         </div>
         <div class="sidebar-user">
-          <span>用户名 <strong id="signed-in-user"></strong></span>
+          <span>用户 <strong id="signed-in-user"></strong></span>
           <button id="logout-user" data-api="POST /api/auth/logout" class="btn-secondary" type="button">退出登录</button>
         </div>
       </div>
