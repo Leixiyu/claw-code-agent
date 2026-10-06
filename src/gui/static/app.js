@@ -2720,9 +2720,13 @@ function initVideoUpload() {
   document.addEventListener('pointerdown', (event) => {
     if (!control.contains(event.target)) closeMenu();
   });
+  // Safari can blur a focused button on pointerdown, hiding the menu before
+  // click reaches the item. Keep focus here until the file picker is opened.
+  item.addEventListener('pointerdown', (event) => event.preventDefault());
   item.addEventListener('click', () => {
-    closeMenu(true);
+    if (input.disabled) return;
     input.click();
+    closeMenu(true);
   });
   input.onchange = async (event) => {
     const input = event.target;
