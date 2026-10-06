@@ -379,12 +379,18 @@ body {
 }
 
 .btn-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   background: var(--accent);
   color: #1a0f00;
   font-weight: 600;
   align-self: flex-end;
-  padding: 9px 18px;
+  padding: 0 18px;
   height: 36px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .btn-send:hover:not(:disabled) {
