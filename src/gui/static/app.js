@@ -2683,12 +2683,52 @@ function bind() {
   });
 }
 
-async function init() {
-  await window.requireHarnessLogin();
-  window.initHarnessUsage();
-  document.querySelector('#video-upload').onchange = async (event) => {
+function initVideoUpload() {
+  const control = document.querySelector('.upload-control');
+  const input = document.querySelector('#video-upload');
+  const toggle = document.querySelector('#upload-toggle');
+  const menu = document.querySelector('#upload-menu');
+  const item = document.querySelector('#upload-video-item');
+  function closeMenu(restoreFocus = false) {
+    menu.hidden = true;
+    toggle.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) toggle.focus();
+  }
+  function openMenu() {
+    if (input.disabled) return;
+    menu.hidden = false;
+    toggle.setAttribute('aria-expanded', 'true');
+    item.focus();
+  }
+  toggle.addEventListener('click', () => {
+    if (menu.hidden) openMenu();
+    else closeMenu(true);
+  });
+  control.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !menu.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu(true);
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      openMenu();
+    }
+  });
+  control.addEventListener('focusout', (event) => {
+    if (!control.contains(event.relatedTarget)) closeMenu();
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!control.contains(event.target)) closeMenu();
+  });
+  item.addEventListener('click', () => {
+    closeMenu(true);
+    input.click();
+  });
+  input.onchange = async (event) => {
     const input = event.target;
     input.disabled = true;
+    toggle.disabled = true;
+    item.disabled = true;
     try {
       for (const file of input.files) {
         setStatus('busy', `正在上传 ${file.name}…`);
@@ -2697,12 +2737,30 @@ async function init() {
         });
         const payload = await window.harnessReadResponse(response);
         els.input.value += `${els.input.value ? '\n' : ''}视频：${payload.video_ref.path}`;
-        appendMessage({ role: 'progress', content: `已上传：${payload.video_ref.path}` });
+        const notice = appendMessage({ role: 'progress', content: `已上传：${payload.video_ref.path.split('/').pop()}` });
+        setTimeout(() => {
+          if (!notice.isConnected) return;
+          const fade = notice.animate([{ opacity: 1 }, { opacity: 0 }], {
+            duration: 300, fill: 'forwards',
+          });
+          fade.onfinish = () => notice.remove();
+        }, 3000);
       }
       setStatus('ready', 'Ready');
     } catch (error) { appendMessage({ role: 'error', content: error.message }); }
-    finally { input.disabled = false; input.value = ''; }
+    finally {
+      input.disabled = false;
+      toggle.disabled = false;
+      item.disabled = false;
+      input.value = '';
+    }
   };
+}
+
+async function init() {
+  await window.requireHarnessLogin();
+  window.initHarnessUsage();
+  initVideoUpload();
   bind();
   const firstTab = Array.from(els.viewTabs).find(tab => !tab.hidden);
   if (firstTab) setView(firstTab.dataset.view);

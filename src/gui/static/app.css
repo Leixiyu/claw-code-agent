@@ -714,6 +714,7 @@ body {
 
 #prompt-input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   resize: none;
@@ -725,6 +726,94 @@ body {
   outline: none;
   min-height: 22px;
   max-height: 200px;
+}
+
+.upload-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.btn-upload {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.btn-upload:hover:not(:disabled),
+.btn-upload[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.btn-upload:focus-visible,
+.upload-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-upload:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.upload-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 12px);
+  z-index: 20;
+  width: 224px;
+  max-width: calc(100vw - 48px);
+  padding: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.upload-menu-title {
+  padding: 5px 10px 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.upload-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.upload-menu-item:hover,
+.upload-menu-item:focus-visible {
+  background: var(--bg-soft);
+}
+
+.upload-video-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .composer-meta {

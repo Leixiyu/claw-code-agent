@@ -24,10 +24,6 @@
           <span class="brand-name">Claw&nbsp;Code</span>
         </div>
         <button id="new-session-btn" data-api="POST /api/chat/stream" class="btn-primary" type="button" title="打开空白对话，发送首条消息后创建新会话；保留历史和 Token 用量">+ 新对话</button>
-        <div data-api="POST /api/uploads">
-          <label class="sidebar-title" for="video-upload">上传视频</label>
-          <input id="video-upload" type="file" accept="video/*" multiple />
-        </div>
       </div>
       <div class="sidebar-content">
         <div class="sidebar-section" data-api="GET /api/sessions">
@@ -240,6 +236,27 @@
             rows="1"
             autocomplete="off"
           ></textarea>
+          <div class="upload-control" data-api="POST /api/uploads">
+            <input id="video-upload" type="file" accept="video/*" multiple hidden />
+            <button id="upload-toggle" class="btn-upload" type="button" aria-label="上传"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="upload-menu" title="上传">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+            <div id="upload-menu" class="upload-menu" role="menu" aria-labelledby="upload-menu-title" hidden>
+              <div id="upload-menu-title" class="upload-menu-title">上传</div>
+              <button id="upload-video-item" class="upload-menu-item" type="button" role="menuitem">
+                <span class="upload-video-icon" aria-hidden="true">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="5" width="18" height="14" rx="3" />
+                    <path d="m10 9 5 3-5 3Z" fill="currentColor" stroke="none" />
+                  </svg>
+                </span>
+                <span>视频</span>
+              </button>
+            </div>
+          </div>
           <button id="send-btn" data-api="POST /api/chat/stream" type="button" class="btn-send" title="Send">Send</button>
         </div>
         <div class="composer-meta">
