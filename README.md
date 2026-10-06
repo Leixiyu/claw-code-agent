@@ -1095,3 +1095,23 @@ It covers: core runtime, CLI modes, prompt assembly, context/memory, slash comma
 <p align="center">
   <sub>Built with 🐍 Python · Powered by 🐉 HarnessLab Team.</sub>
 </p>
+
+
+### 上传视频目录与 Agent 查询
+
+`POST /api/uploads` 将文件保存到当前用户的 `uploads/`，命名为
+`{原视频名}_{YYYYMMDD_HHMMSS_SSS}.{扩展名}`（北京时间 UTC+08:00）；
+同毫秒重名时追加随机后缀，采用排他创建以避免覆盖。上传成功后，
+`uploads/videos.json` 通过文件锁和原子替换追加一条记录：
+
+```json
+[{"original_filename":"xxx.mp4","uploaded_at":"2026-10-06T14:30:25.123+08:00","path":"uploads/xxx_20261006_143025_123.mp4"}]
+```
+
+用户注册时，与其他目录和索引一起创建 `uploads/videos.json`，初始内容为 `[]`。
+再次初始化仅补建缺失文件，不会清空已有记录。
+无参数工具 `list_uploaded_videos` 返回当前用户的完整 JSON 数组。
+Agent 按原文件名匹配并使用实际路径提交后续流程；多个匹配仍有歧义时询问用户。
+上传接口保留 `video_ref`、`size_bytes`，并新增上述三个元数据字段。
+不按内容去重。失败上传不写入记录；历史上传不自动补录，因为原始名称和上传时间未必可恢复。
+启用修改后需重启服务以更新 Agent 工具和提示词。

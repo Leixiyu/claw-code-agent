@@ -50,7 +50,7 @@ OPERATIONS = {
         '保留独立 Token 账本、上传文件及业务任务。没有删除全部历史的接口。'),
     ('post', '/api/uploads'): ('文件上传', '上传视频文件',
         '请求体直接发送文件二进制，不能使用 multipart/form-data。X-Filename 为不含目录的文件名，'
-        '中文文件名请先做 URL 编码，解码后最多 180 字节。空文件不接受，重名自动加前缀。'
+        '中文文件名请先做 URL 编码，解码后最多 180 字节。空文件不接受；文件名追加北京时间（含毫秒），冲突时再追加随机后缀。成功后记录到 uploads/videos.json。'
         '大小上限由 HARNESS_MAX_UPLOAD_BYTES 配置，默认 2 GiB。返回 video_ref 可传给视频业务工具。'),
     ('get', '/api/usage'): ('Token 用量', '历史 Token 总量',
         'total_tokens = input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens；'
@@ -183,6 +183,9 @@ def _describe_operation(method, path, operation):
         responses['200'] = _json_response('上传完成', {'type': 'object', 'properties': {
             'video_ref': {'type': 'object', 'properties': {
                 'type': {'type': 'string', 'enum': ['upload_file']}, 'path': {'type': 'string'}}},
+            'original_filename': {'type': 'string'},
+            'uploaded_at': {'type': 'string', 'format': 'date-time'},
+            'path': {'type': 'string'},
             'size_bytes': {'type': 'integer'}}})
     if path == '/api/chat/stream':
         responses['200'] = {'description': '逐行解析；遇到 result 或 error 结束', 'content': {

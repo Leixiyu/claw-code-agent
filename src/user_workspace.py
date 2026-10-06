@@ -25,7 +25,7 @@ def contained(root: Path, path: Path) -> Path:
     return path
 
 
-def atomic_json(path: Path, payload: dict) -> None:
+def atomic_json(path: Path, payload: dict | list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(f'.{path.name}.{uuid4().hex}.tmp')
     try:
@@ -129,6 +129,9 @@ def initialize_user(root: Path, user_id: str) -> Path:
     for directory in ('uploads', 'sessions', '.port_sessions/scratchpad', 'runtime-home/.claude'):
         contained(workspace, workspace / directory).mkdir(parents=True, exist_ok=True, mode=0o700)
     with index_lock(workspace):
+        catalog = contained(workspace, workspace / 'uploads' / 'videos.json')
+        if not catalog.exists():
+            atomic_json(catalog, [])
         for filename in TASK_INDEX_FILES.values():
             path = contained(workspace, workspace / filename)
             if not path.exists():

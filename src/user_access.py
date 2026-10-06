@@ -39,6 +39,7 @@ USER_AVAILABLE = {
     ('tool', 'grep_search'),
     ('tool', 'list_dir'),
     ('tool', 'list_model_training_tasks'),
+    ('tool', 'list_uploaded_videos'),
     ('tool', 'list_video_analysis_tasks'),
     ('tool', 'list_video_processing_tasks'),
     ('tool', 'read_file'),

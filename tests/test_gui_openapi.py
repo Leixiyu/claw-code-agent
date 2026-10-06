@@ -111,7 +111,12 @@ class PublicOpenAPITests(unittest.TestCase):
         response = self.client.post('/api/uploads', content=b'fixture-video',
             headers={'X-Filename': 'test.mp4', 'Content-Type': 'application/octet-stream'})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'video_ref': {'type': 'upload_file', 'path': 'uploads/test.mp4'}, 'size_bytes': 13})
+        payload = response.json()
+        self.assertEqual(payload['original_filename'], 'test.mp4')
+        self.assertEqual(payload['size_bytes'], 13)
+        self.assertRegex(payload['path'], r'^uploads/test_\d{8}_\d{6}_\d{3}\.mp4$')
+        self.assertEqual(payload['video_ref'], {'type': 'upload_file', 'path': payload['path']})
+        self.assertTrue(payload['uploaded_at'].endswith('+08:00'))
         stream_response = self.client.post('/api/chat/stream', json={'prompt': 'test', 'resume_session_id': 'missing'})
         self.assertEqual(stream_response.status_code, 200)
         self.assertEqual(json.loads(stream_response.text)['type'], 'error')

@@ -1510,7 +1510,25 @@ def default_tool_registry() -> dict[str, AgentTool]:
             parameters={'type': 'object', 'properties': {}, 'additionalProperties': False},
             handler=_business_list_handler(name),
         ))
+    tools.append(AgentTool(
+        name='list_uploaded_videos',
+        description=('Read all upload records for the current user, including original_filename, '
+                     'uploaded_at and actual path. Use the returned path for subsequent video workflows; '
+                     'never guess timestamped filenames. Records cover cataloged uploads only.'),
+        parameters={'type': 'object', 'properties': {}, 'additionalProperties': False},
+        handler=_list_uploaded_videos,
+    ))
     return {tool.name: tool for tool in tools}
+
+
+def _list_uploaded_videos(arguments, context):
+    from .upload_catalog import read_uploaded_videos
+    if arguments:
+        raise ToolExecutionError('list_uploaded_videos takes no arguments')
+    try:
+        return json.dumps(read_uploaded_videos(context.root), ensure_ascii=False)
+    except ValueError as exc:
+        raise ToolExecutionError(str(exc)) from exc
 
 
 def _business_list_handler(name: str):

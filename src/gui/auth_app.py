@@ -5,7 +5,6 @@ import asyncio
 import inspect
 import os
 from urllib.parse import unquote, urlsplit
-from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Query
 from typing import Literal
@@ -18,6 +17,7 @@ from starlette.requests import Request as ScopeRequest
 
 from ..auth_runtime import AuthenticationError, AuthStore
 from ..user_workspace import contained, initialize_user
+from ..upload_catalog import create_upload, record_upload
 from ..user_agent import user_prompt, user_tools, user_runtime_config
 
 
@@ -112,13 +112,7 @@ def create_authenticated_app(template, auth_store=None):
             raise HTTPException(400, 'X-Filename must be a filename without directories')
         if len(filename.encode()) > 180:
             raise HTTPException(400, 'filename is too long')
-        directory = contained(workspace, workspace / 'uploads')
-        path = contained(workspace, directory / filename)
-        try:
-            output = path.open('xb')
-        except FileExistsError:
-            path = contained(workspace, directory / f'{uuid4().hex[:12]}-{filename}')
-            output = path.open('xb')
+        path, output, record = create_upload(workspace, filename)
         complete = False
         size = 0
         try:
@@ -131,11 +125,12 @@ def create_authenticated_app(template, auth_store=None):
                     output.write(chunk)
             if size == 0:
                 raise HTTPException(400, 'empty upload')
+            record_upload(workspace, record)
             complete = True
         finally:
             if not complete:
                 path.unlink(missing_ok=True)
-        return {'video_ref': {'type': 'upload_file', 'path': path.relative_to(workspace).as_posix()}, 'size_bytes': size}
+        return {**record, 'video_ref': {'type': 'upload_file', 'path': record['path']}, 'size_bytes': size}
 
     class Dispatch:
         async def __call__(self, scope, receive, send):

@@ -67,6 +67,23 @@ class UserPrototypeTests(unittest.TestCase):
                 token = self.store.login(username, password)['access_token']
                 self.assertEqual(self.store.authenticate(token), user)
 
+    def test_registration_creates_empty_upload_catalog_without_overwriting(self):
+        user = self.store.create_user('catalog-user', 'test-password-catalog')
+        workspace = self.root / 'users' / user['user_id']
+        catalog = workspace / 'uploads/videos.json'
+        # Read immediately after registration, without another initialize call.
+        self.assertEqual(json.loads(catalog.read_text()), [])
+        records = [{'original_filename': 'saved.mp4',
+                    'uploaded_at': '2026-10-06T14:30:25.123+08:00',
+                    'path': 'uploads/saved_20261006_143025_123.mp4'}]
+        catalog.write_text(json.dumps(records))
+        initialize_user(self.root, user['user_id'])
+        self.assertEqual(json.loads(catalog.read_text()), records)
+        # Existing users without the catalog get it on initialization, too.
+        catalog.unlink()
+        initialize_user(self.root, user['user_id'])
+        self.assertEqual(json.loads(catalog.read_text()), [])
+
     def test_indexes_are_deduplicated_and_user_scoped(self):
         with ThreadPoolExecutor(max_workers=8) as executor:
             list(executor.map(lambda i: add_task_id(self.wa, 'analysis', f'task-{i % 5}'), range(20)))
@@ -89,12 +106,68 @@ class UserPrototypeTests(unittest.TestCase):
             paths = [client.post('/api/uploads', headers={'X-Filename': 'test.mp4'}, content=b'video').json()['video_ref']['path'] for _ in range(2)]
             self.assertNotEqual(*paths)
             self.assertEqual((self.wa / paths[0]).read_bytes(), b'video')
-            self.assertEqual(list((self.wb / 'uploads').iterdir()), [])
+            self.assertEqual(list((self.wb / 'uploads').iterdir()), [self.wb / 'uploads/videos.json'])
+            self.assertEqual(json.loads((self.wb / 'uploads/videos.json').read_text()), [])
             self.assertEqual(client.post('/api/uploads', headers={'X-Filename': '../x'}, content=b'x').status_code, 400)
             self.assertEqual(client.post('/api/state', json={'cwd': str(self.root)}).status_code, 403)
             self.assertEqual(client.post('/api/memory', json={}).status_code, 403)
             client.post('/api/auth/logout')
             self.assertEqual(client.get('/api/auth/me').status_code, 401)
+
+    def test_upload_catalog_tool_and_timestamp_collision(self):
+        from datetime import datetime, timezone, timedelta
+        from src.user_agent import user_tools
+        from src.agent_tools import ToolExecutionContext
+        from src.agent_types import AgentPermissions
+        fixed = datetime(2026, 10, 6, 14, 30, 25, 123000,
+                         tzinfo=timezone(timedelta(hours=8)))
+        app = self.app()
+        with TestClient(app) as client, patch('src.upload_catalog.datetime') as clock:
+            clock.now.return_value = fixed
+            records = []
+            for content in (b'first', b'second'):
+                response = client.post('/api/uploads', headers={**self.headers, 'X-Filename': 'xxx.mp4'}, content=content)
+                self.assertEqual(response.status_code, 200, response.text)
+                payload = response.json()
+                self.assertEqual(payload['original_filename'], 'xxx.mp4')
+                self.assertEqual(payload['uploaded_at'], '2026-10-06T14:30:25.123+08:00')
+                self.assertEqual(payload['path'], payload['video_ref']['path'])
+                records.append({key: payload[key] for key in ('original_filename', 'uploaded_at', 'path')})
+            self.assertEqual(records[0]['path'], 'uploads/xxx_20261006_143025_123.mp4')
+            self.assertNotEqual(records[0]['path'], records[1]['path'])
+            self.assertEqual((self.wa / records[0]['path']).read_bytes(), b'first')
+            self.assertEqual((self.wa / records[1]['path']).read_bytes(), b'second')
+        self.assertEqual(json.loads((self.wa / 'uploads/videos.json').read_text()), records)
+        tool = user_tools()['list_uploaded_videos']
+        def context(root):
+            return ToolExecutionContext(root=root, command_timeout_seconds=10,
+                                        max_output_chars=10000, permissions=AgentPermissions())
+        result = tool.execute({}, context(self.wa))
+        self.assertTrue(result.ok)
+        self.assertEqual(json.loads(result.content), records)
+        self.assertEqual(json.loads(tool.execute({}, context(self.wb)).content), [])
+        (self.wa / 'uploads/videos.json').write_text('broken json')
+        self.assertFalse(tool.execute({}, context(self.wa)).ok)
+
+    def test_failed_upload_does_not_publish_record(self):
+        with TestClient(self.app()) as client:
+            headers = {**self.headers, 'X-Filename': 'fail.mp4'}
+            with patch.dict(os.environ, {'HARNESS_MAX_UPLOAD_BYTES': '2'}):
+                self.assertEqual(client.post('/api/uploads', headers=headers, content=b'123').status_code, 413)
+            self.assertEqual(client.post('/api/uploads', headers=headers, content=b'').status_code, 400)
+            with patch('src.gui.auth_app.record_upload', side_effect=OSError('disk error')):
+                self.assertEqual(client.post('/api/uploads', headers=headers, content=b'ok').status_code, 500)
+        self.assertEqual(list((self.wa / 'uploads').iterdir()), [self.wa / 'uploads/videos.json'])
+        self.assertEqual(json.loads((self.wa / 'uploads/videos.json').read_text()), [])
+
+    def test_concurrent_upload_catalog_appends(self):
+        from src.upload_catalog import record_upload, read_uploaded_videos
+        records = [{'original_filename': f'{i}.mp4', 'uploaded_at': '2026-10-06T14:30:25.123+08:00',
+                    'path': f'uploads/{i}.mp4'} for i in range(20)]
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(lambda record: record_upload(self.wa, record), records))
+        self.assertCountEqual(read_uploaded_videos(self.wa), records)
+        self.assertEqual(read_uploaded_videos(self.wb), [])
 
     def test_gui_states_stream_and_history_are_isolated(self):
         app = self.app()
@@ -215,7 +288,8 @@ class UserPrototypeTests(unittest.TestCase):
         (legacy / 'tasks' / 'analysis' / 'a1.json').write_text('{"task_id":"a1","result":{"secret":1}}')
         report = migrate_user_data(legacy, self.root, self.a['user_id'])
         self.assertFalse(report['applied'])
-        self.assertEqual(list((self.wa / 'uploads').iterdir()), [])
+        self.assertEqual(list((self.wa / 'uploads').iterdir()), [self.wa / 'uploads/videos.json'])
+        self.assertEqual(json.loads((self.wa / 'uploads/videos.json').read_text()), [])
         migrate_user_data(legacy, self.root, self.a['user_id'], apply=True)
         self.assertEqual((self.wa / 'uploads' / 'v.mp4').read_bytes(), b'original')
         self.assertTrue((legacy / 'tasks' / 'analysis' / 'a1.json').exists())
@@ -305,7 +379,8 @@ class UserPrototypeTests(unittest.TestCase):
         with TestClient(self.app()) as client, patch.dict(os.environ, {'HARNESS_MAX_UPLOAD_BYTES': '3'}):
             response = client.post('/api/uploads', headers={**self.headers, 'X-Filename': 'large.mp4'}, content=b'1234')
             self.assertEqual(response.status_code, 413)
-            self.assertEqual(list((self.wa / 'uploads').iterdir()), [])
+            self.assertEqual(list((self.wa / 'uploads').iterdir()), [self.wa / 'uploads/videos.json'])
+            self.assertEqual(json.loads((self.wa / 'uploads/videos.json').read_text()), [])
 
     def test_migration_rebinds_session_and_preserves_source(self):
         legacy = Path(self.temp.name) / 'legacy'
