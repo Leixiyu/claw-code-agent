@@ -45,10 +45,16 @@ window.requireHarnessLogin = async function () {
     document.querySelector('#app').hidden = true;
     document.querySelector('#login-error').textContent = '登录已失效，请重新登录。';
   });
-  document.querySelector('#login-form').onsubmit = async (event) => {
+  const form = document.querySelector('#login-form');
+  const button = form.querySelector('button[type="submit"]');
+  form.elements.password.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.isComposing) return;
     event.preventDefault();
-    const form = event.target;
-    const button = form.querySelector('button');
+    if (!event.repeat && !button.disabled) form.requestSubmit(button);
+  });
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (button.disabled) return;
     button.disabled = true;
     try {
       const payload = await window.harnessReadResponse(await window.harnessFetch('/api/auth/login', {
